@@ -28,7 +28,7 @@ robot = khirolib(IP, PORT, connection_mode='single')
 # Upload program from file
 robot.upload_program(filename="as_programs/test.as", kill_current_program=True)
 
-#Upload program from string
+# Upload program from string
 robot.upload_program(program_name="prog", program_text=program_text, kill_current_program=True)
 # where string is:
 program_text = "var1 = 10\n" \

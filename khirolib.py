@@ -18,9 +18,14 @@ class bcolors:
 
 
 class khirolib():
-    def __init__(self, ip, port, connection_mode='single'):
+    def __init__(self, ip, port, connection_mode='single', log=False):
         self.ip_address = ip
         self.port_number = port
+        self.logging = log
+
+        if self.logging:
+            self.logfile = open("log.txt", "w")
+            self.logfile.write(str(time.time()) + ":" + "Log started" + '\n')
 
         self.server = None
 
@@ -29,11 +34,14 @@ class khirolib():
                 print(f"{bcolors.WARNING}Can't establish connection with robot."
                       f" Continue in single connection mode{bcolors.ENDC}")
                 self.connection_mode = 'single'
+                self.add_to_log("Can't connect to robot continuously, set single mode")
             else:
                 self.connection_mode = 'continuous'
+                self.add_to_log("Connection mode - continuous")
 
         elif connection_mode == 'single':
             self.connection_mode = 'single'
+            self.add_to_log("Connection mode - single")
 
         else:
             print(f"{bcolors.WARNING}Can't find this connection mode."
@@ -130,12 +138,13 @@ class khirolib():
         while True:
             error_counter += 1
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'\x0d\x0a\x3e') >= 0:  # 'Cleared error state'
+            if receive_string.find(b'\x0d\x0a\x3e') >= 0:
                 receive_string = self.server.recv(4096)
                 break
 
             if error_counter > error_counter_limit:
                 print("Execute - handshake error")
+                self.add_to_log("Execute handshake CTE")
                 self.abort_connection()
                 self.robot_is_busy = False
                 return -1000
@@ -150,12 +159,15 @@ class khirolib():
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
             if receive_string.find(b'state' + b'\x2e\x0d\x0a\x3e') >= 0:  # 'Cleared error state'
                 receive_string = self.server.recv(4096)
+                self.add_to_log("ERESET 1 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 break
             if receive_string.find(b'ERESET' + b'\x0d\x0a\x3e') >= 0:  # 'ERESET' (without clear = not error)
                 receive_string = self.server.recv(4096)
+                self.add_to_log("ERESET 2 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 break
 
             if error_counter > error_counter_limit:
+                self.add_to_log("Execute ERESET CTE")
                 print("Execute - ERESET error")
                 self.abort_connection()
                 self.robot_is_busy = False
@@ -171,8 +183,10 @@ class khirolib():
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
             if receive_string.find(b'\x0d\x0a\x3e') >= 0:     # This is AS monitor terminal..  Wait '>' sign from robot
                 receive_string = self.server.recv(4096)
+                self.add_to_log("ZPOW ON " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 break
             if error_counter > error_counter_limit:
+                self.add_to_log("ZPOW ON CTE")
                 print("Execute - ZPOW ON error")
                 self.abort_connection()
                 self.robot_is_busy = False
@@ -187,6 +201,7 @@ class khirolib():
 
             if receive_string.find(b'completed.No = 1') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
                 receive_string = self.server.recv(4096)
+                self.add_to_log("Program complete " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 print(f"{bcolors.WARNING}Program complete.{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
@@ -197,6 +212,7 @@ class khirolib():
 
             if receive_string.find(b'(E6509) No work detected') > 0:
                 receive_string = self.server.recv(4096)
+                self.add_to_log("Program not complete " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 print(f"{bcolors.WARNING}Program not complete. TS error detected.{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
@@ -207,6 +223,7 @@ class khirolib():
 
             if receive_string.find(b'Program halted.No = 1') > 0:
                 receive_string = self.server.recv(4096)
+                self.add_to_log("Program not complete. Program halted. " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 print(f"{bcolors.WARNING}Program not complete. Program halted.{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
@@ -217,6 +234,7 @@ class khirolib():
 
             if receive_string.find(b'aborted.No = 1') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
                 receive_string = self.server.recv(4096)
+                self.add_to_log("Execution program aborted " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 print("Execution program aborted")
 
                 if self.connection_mode == 'single':
@@ -243,8 +261,10 @@ class khirolib():
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
             if receive_string.find(b'login:') >= 0:     # Wait 'login:' message from robot
                 receive_string = self.server.recv(4096)
+                self.add_to_log("Robot->PC 1 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 break
             if error_counter > error_counter_limit:
+                self.add_to_log("Robot->PC CTE 1" + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 print("Connection timeout error - 1")
                 self.server.close()
                 return -1
@@ -258,8 +278,10 @@ class khirolib():
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
             if receive_string.find(b'\x3e') >= 0:     # This is AS monitor terminal..  Wait '>' sign from robot
                 receive_string = self.server.recv(4096)
+                self.add_to_log("Robot->PC 2 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 return 0
             if error_counter > error_counter_limit:
+                self.add_to_log("Robot->PC CTE 2" + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 print("Connection timeout error - 2")
                 self.server.close()
                 return -1
@@ -327,11 +349,13 @@ class khirolib():
                 return -1000
 
     def close_connection(self):
+        self.add_to_log("Close connection")
         self.server.close()
 
     def abort_connection(self):
         if self.connection_mode == 'continuous':
             self.connection_mode = 'single'
+            self.add_to_log("Abort connection")
         self.server.close()
 
     def upload_program(self, filename=None, program_name=None, program_text=None, kill_current_program=True):
@@ -343,10 +367,12 @@ class khirolib():
 
         if filename is None:
             if (program_name is None) or (program_text is None):
+                self.add_to_log("Error 1")
                 print("You should set correct function arguments")
                 return -2
         else:
             if (program_name is not None) or (program_text is not None):
+                self.add_to_log("Error 2")
                 print("You couldn't use loading from file and from string in the same time")
                 return -2
 
@@ -390,10 +416,12 @@ class khirolib():
                 error_counter += 1
                 receive_string = self.server.recv(4096, socket.MSG_PEEK)
                 if receive_string.find(b'HOLD' + b'\x0d\x0a\x3e') >= 0:
-                    tmp = self.server.recv(4096)
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("HOLD " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("HOLD CTE")
                     self.abort_connection()
                     return -1000
 
@@ -406,10 +434,12 @@ class khirolib():
                 error_counter += 1
                 receive_string = self.server.recv(4096, socket.MSG_PEEK)
                 if receive_string.find(b'ZPOW OFF' + b'\x0d\x0a\x3e') >= 0:
-                    tmp = self.server.recv(4096)
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("ZPOW OFF " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("ZPOW OFF CTE")
                     self.abort_connection()
                     return -1000
 
@@ -422,10 +452,12 @@ class khirolib():
                 error_counter += 1
                 receive_string = self.server.recv(4096, socket.MSG_PEEK)
                 if receive_string.find(b'ABORT' + b'\x0d\x0a\x3e') >= 0:
-                    tmp = self.server.recv(4096)
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("ABORT " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("ABORT CTE")
                     self.abort_connection()
                     return -1000
 
@@ -438,10 +470,12 @@ class khirolib():
                 error_counter += 1
                 receive_string = self.server.recv(4096, socket.MSG_PEEK)
                 if receive_string.find(b'\x3a\x30\x29\x20') >= 0:  # END (Yes:1, No:0)
-                    tmp = self.server.recv(4096)
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("KILL " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("KILL CTE 1")
                     self.abort_connection()
                     return -1000
 
@@ -456,6 +490,7 @@ class khirolib():
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("KILL CTE 2")
                     self.abort_connection()
                     return -1000
 
@@ -471,6 +506,7 @@ class khirolib():
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("TYPE TASK CTE")
                     self.abort_connection()
                     return -1000
 
@@ -499,9 +535,11 @@ class khirolib():
                 input_buffer = self.server.recv(4096)
                 segment_pos = input_buffer.find(b'Ausing.rcc' + b'\x17')
                 input_buffer = input_buffer[segment_pos + len(b'Ausing.rcc' + b'\x17'):]
+                self.add_to_log("LOAD using.rcc " + input_buffer.decode("utf-8", 'ignore') + ":" + input_buffer.hex())
                 break
 
             if error_counter > error_counter_limit:
+                self.add_to_log("LOAD using.rcc CTE")
                 self.abort_connection()
                 return -1000
 
@@ -517,9 +555,11 @@ class khirolib():
                 input_buffer = input_buffer + self.server.recv(4096)
                 segment_pos = input_buffer.find(b'(using.rcc)' + b'\x0d\x0a')
                 input_buffer = input_buffer[segment_pos + len(b'(using.rcc)' + b'\x0d\x0a'):]
+                self.add_to_log("LOAD 1 " + input_buffer.decode("utf-8", 'ignore') + ":" + input_buffer.hex())
                 break
 
             if error_counter > error_counter_limit:
+                self.add_to_log("LOAD 1 CTE")
                 self.abort_connection()
                 return -1000
 
@@ -542,6 +582,7 @@ class khirolib():
                         input_buffer = input_buffer + \
                                        tmp_buffer[:segment_pos] + \
                                        tmp_buffer[segment_pos + len(b'\x05\x02\x43\x17'):]
+                        self.add_to_log("uploading " + str(i) + ":" + tmp_buffer.decode("utf-8", 'ignore') + ":" + tmp_buffer.hex())
                         i += 1
                         break
 
@@ -551,6 +592,7 @@ class khirolib():
                         break
 
                     if error_counter > error_counter_limit:
+                        self.add_to_log("uploading CTE")
                         self.abort_connection()
                         return -1000
             else:
@@ -579,8 +621,11 @@ class khirolib():
                     break
 
                 if error_counter > error_counter_limit:
+                    self.add_to_log("Error 3 CTE")
                     self.abort_connection()
                     return -1000
+
+        self.add_to_log("Upload success " + str(upload_success))
 
         continue_removing_packages = True
         if not upload_success:
@@ -610,6 +655,7 @@ class khirolib():
                         break
 
                     if error_counter > error_counter_limit:
+                        self.add_to_log("Error 4 CTE")
                         self.abort_connection()
                         return -1000
 
@@ -624,11 +670,13 @@ class khirolib():
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
             # print("SCF", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
             if receive_string.find(b'\x29\x0d\x0a\x3e') >= 0:  # waiting 'File load completed. (n errors)' + 0d 0a 3e.
-                receive_string = self.server.recv(4096).decode("utf-8", 'ignore')
-                split_message = receive_string.split(" ")
+                receive_string = self.server.recv(4096)
+                self.add_to_log("Loading complete " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                split_message = receive_string.decode("utf-8", 'ignore').split(" ")
                 break
 
             if error_counter > error_counter_limit:
+                self.add_to_log("Error 5 CTE")
                 self.abort_connection()
                 return -1000
 
@@ -644,12 +692,18 @@ class khirolib():
 
             return None
         else:
-            print("File transmission not complete - Errors found")
+            print(f"{bcolors.FAIL}File transmission not complete - Errors found{bcolors.ENDC}")
+            print("Errors list:")
             print(error_message)
             print("Num errors:", num_errors)
+            print("-----------------")
 
             if self.connection_mode == 'single':
                 self.abort_connection()
             self.robot_is_busy = False
 
             return -1
+
+    def add_to_log(self, msg):
+        if self.logging:
+            self.logfile.write(str(time.time()) + ":" + msg + '\n')
