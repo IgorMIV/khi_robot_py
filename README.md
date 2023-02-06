@@ -12,6 +12,10 @@ Now it works excellent with K-Roset simulator and I will test it with real robot
 In the future, I plan to implement support for working with PC-programs too.
 
 See example.py file.
+#
+### Announcement!!
+**If anyone knows how to remove the error 'P2076' 'SAVE/LOAD in progress' - please write issue!**
+#
 
 Working modes (_connection_mode_ argument):
 - _single_ mode - every command requires reconnection
