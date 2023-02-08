@@ -1,6 +1,7 @@
 import socket
 import time
 import math
+import re
 
 
 error_counter_limit = 100000
@@ -703,6 +704,381 @@ class khirolib():
             self.robot_is_busy = False
 
             return -1
+
+    def upload_program_experimental(self, filename=None, program_name=None, program_text=None, kill_current_program=True):
+        #  Return:
+        #  None - everything is OK
+        # -1 -upload with error
+        # -2 - function arguments error
+        # -1000 - communication with robot was aborted
+
+        if filename is None:
+            if (program_name is None) or (program_text is None):
+                self.add_to_log("Error 1")
+                print("You should set correct function arguments")
+                return -2
+        else:
+            if (program_name is not None) or (program_text is not None):
+                self.add_to_log("Error 2")
+                print("You couldn't use loading from file and from string in the same time")
+                return -2
+
+        self.robot_is_busy = True
+
+        footer_message = bytes.fromhex('0a')
+
+        # Read file data and split to packages
+        # one package limit is 2918 byte (in KIDE)
+        if filename is not None:
+            f = open(filename, "r")
+            file_string = f.read()
+        else:
+            file_string = '.PROGRAM ' + program_name + '\n'
+            file_string += program_text + '\n'
+            file_string += '.END' + '\n'
+
+        file = bytes(file_string, 'utf-8') + bytes.fromhex('0d 0a')
+        num_packages = math.ceil(len(file) / 2910)
+        file_packages = []
+
+        for i in range(num_packages):
+            pckg = bytes.fromhex('02 43 20 20 20 20 30') + \
+                   file[i * 2910:(i + 1) * 2910] + \
+                   bytes.fromhex('17')
+            file_packages.append(pckg)
+
+        if self.connection_mode == 'single':
+            # Connect to robot in single mode
+            if self.connect() == -1:
+                print("Can't establish connection with robot")
+                return -1000
+
+        if kill_current_program:
+            # Hold robot
+            self.server.sendall("HOLD".encode())
+            self.server.sendall(footer_message)
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'HOLD' + b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("HOLD " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.add_to_log("HOLD CTE")
+                    self.abort_connection()
+                    return -1000
+
+            # ZPOW OFF robot
+            self.server.sendall("ZPOW OFF".encode())
+            self.server.sendall(footer_message)
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'ZPOW OFF' + b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("ZPOW OFF " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.add_to_log("ZPOW OFF CTE")
+                    self.abort_connection()
+                    return -1000
+
+            # ABORT robot
+            self.server.sendall("ABORT".encode())
+            self.server.sendall(footer_message)
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'ABORT' + b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("ABORT " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.add_to_log("ABORT CTE")
+                    self.abort_connection()
+                    return -1000
+
+            # KILL robot
+            self.server.sendall("KILL".encode())
+            self.server.sendall(footer_message)
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'\x3a\x30\x29\x20') >= 0:  # END (Yes:1, No:0)
+                    receive_string = self.server.recv(4096)
+                    self.add_to_log("KILL " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.add_to_log("KILL CTE 1")
+                    self.abort_connection()
+                    return -1000
+
+            tmp = bytes.fromhex('31 0a')  # Delete program and abort
+            self.server.sendall(tmp)
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'\x31\x0d\x0a\x3e') >= 0:
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.add_to_log("KILL CTE 2")
+                    self.abort_connection()
+                    return -1000
+
+            # TYPE TASK (1) robot
+            self.server.sendall("TYPE TASK (1)".encode())
+            self.server.sendall(footer_message)
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'\x30\x0d\x0a\x3e') >= 0:
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.add_to_log("TYPE TASK CTE")
+                    self.abort_connection()
+                    return -1000
+
+            self.server.sendall(footer_message)
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                if receive_string.find(b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    break
+
+                if error_counter > error_counter_limit:
+                    self.abort_connection()
+                    return -1000
+
+        # Enable loading mode
+        self.server.sendall("LOAD using.rcc".encode())
+        self.server.sendall(footer_message)
+
+        tmp = bytes.fromhex('02 41 20 20 20 20 30 17')
+        self.server.sendall(tmp)
+
+        # File transmission
+        i = 0
+        upload_success = True
+        for byte_package in file_packages:
+            if upload_success:
+                self.server.sendall(byte_package)
+
+        tmp = bytes.fromhex('02 43 20 20 20 20 30 1a 17')  # 9
+        self.server.sendall(tmp)
+
+        tmp = bytes.fromhex('02 45 20 20 20 20 30 17')  # Cancel loading mode
+        self.server.sendall(tmp)
+
+        input_buffer = b''
+        error_counter = 0
+        while True:
+            error_counter += 1
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            self.add_to_log("RCV " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+
+            if receive_string.find(b'\x72\x74\x29\x0d\x0a') >= 0:  # End of 'abort)'
+                tmp_buffer = self.server.recv(4096)
+                self.add_to_log("Delete program and abort")
+                input_buffer += tmp_buffer
+                self.server.sendall(b'\x30\x0a')
+                continue
+
+            if receive_string.find(b'\x73\x29\x0d\x0a\x3e') >= 0:  # End of 'errors)'
+                tmp_buffer = self.server.recv(4096)
+                self.add_to_log("File load completed. (n errors)")
+                input_buffer += tmp_buffer
+                break
+
+            if receive_string.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'
+                tmp_buffer = self.server.recv(4096)
+                self.add_to_log("SAVE/LOAD in progress.")
+                print("SAVE/LOAD in progress.")
+
+                if self.connection_mode == 'single':
+                    self.abort_connection()
+
+                return -1
+
+        split_message = input_buffer.decode("utf-8", 'ignore').split(" ")
+
+        if len(split_message) > 2:
+            num_errors = int(split_message[-2][1:])
+
+        if num_errors == 0:
+            print("File transmission complete")
+
+            if self.connection_mode == 'single':
+                self.abort_connection()
+            self.robot_is_busy = False
+
+            return None
+        else:
+            print(f"{bcolors.FAIL}File transmission not complete - Errors found{bcolors.ENDC}")
+            print("Errors list:")
+            print(input_buffer.decode("utf-8", 'ignore'))
+            print("Num errors:", num_errors)
+            print("-----------------")
+
+        if self.connection_mode == 'single':
+            self.abort_connection()
+
+        self.robot_is_busy = False
+
+        return -1
+
+    def status_pc(self, threads=None):
+        self.robot_is_busy = True
+
+        if self.connection_mode == 'single':
+            if self.connect() == -1:
+                print("Can't establish connection with robot")
+                return -1000
+
+        threads_num = []
+        if threads is None:  # Check all threads
+            threads_num = [1, 2, 3, 4, 5]
+        elif type(threads) == int:
+            threads_num = [threads]
+        elif type(threads) == list:
+            for element in threads:
+                if type(element) == int:
+                    if (element <= 5) and (element > 0):
+                        if element in threads_num:
+                            print("The num. of thread is duplicating")
+                            return -1
+                        threads_num.append(element)
+                    else:
+                        print("Num of thread", element, "out of range: 1-5")
+                        return -1
+                else:
+                    print("Num of thread should be int")
+                    return -1
+        else:
+            print("Threads type is illegal")
+            return -1
+
+        # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
+        pc_status_list = [None]*5
+
+        for thread in threads_num:
+            # PCSTATUS
+            self.server.sendall(b'PCSTATUS ' + bytes(str(thread), 'utf-8') + b':')
+            self.server.sendall(b'\x0a')
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                # print("PCSTATUS", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
+                if receive_string.find(b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    result_msg = receive_string.decode("utf-8", 'ignore')
+                    break
+
+                if error_counter > error_counter_limit:
+                    print("PCSTATUS CTE")
+                    self.add_to_log("PCSTATUS CTE")
+                    self.abort_connection()
+                    self.robot_is_busy = False
+                    return -1000
+
+            list_of_strings = result_msg.split('\r\n')
+
+            list_thread_status = list_of_strings[1][:-1].split()
+            pc_status = ' '.join(list_thread_status[2:])
+            if pc_status == 'Program running':
+                pc_status = True
+            else:
+                pc_status = False
+
+            list_thread_name = list_of_strings[6].split()
+            if list_thread_name[0] == 'No':
+                pc_name = None
+            else:
+                pc_name = list_thread_name[0]
+
+            if (pc_name is not None) and (pc_status == 'Program is not running'):
+                pc_aborted = True
+            else:
+                pc_aborted = False
+
+            # print("Result msg:", list_of_strings)
+
+            thread_dict = {"PCRUNNING": pc_status,
+                           "PCNAME:": pc_name,
+                           "PCABORTED": pc_aborted}
+
+            pc_status_list[thread-1] = thread_dict
+
+        if self.connection_mode == 'single':
+            self.abort_connection()
+
+        return pc_status_list
+
+        self.robot_is_busy = False
+
+    def abort_pc(self, num_programs):
+
+        if self.connection_mode == 'single':
+            if self.connect() == -1:
+                print("Can't establish connection with robot")
+                return -1000
+
+        # handshake
+        self.server.sendall(b'\x0a')
+        error_counter = 0
+        while True:
+            error_counter += 1
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            if receive_string.find(b'\x0d\x0a\x3e') >= 0:
+                receive_string = self.server.recv(4096)
+                break
+
+            if error_counter > error_counter_limit:
+                print("PCABORT - handshake error")
+                self.add_to_log("PCABORT handshake CTE")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1000
+
+        # PCABORT
+        self.server.sendall(b'PCABORT ' + bytes(str(1), "UTF-8") + b':')
+        error_counter = 0
+        while True:
+            error_counter += 1
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            print("ABORT", receive_string)
+            if receive_string.find(b'\x3a\x0d\x0a\x3e') >= 0:
+                receive_string = self.server.recv(4096)
+                break
+
+            if error_counter > error_counter_limit:
+                print("PCABORT CTE")
+                self.add_to_log("PCABORT CTE")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1000
 
     def add_to_log(self, msg):
         if self.logging:
