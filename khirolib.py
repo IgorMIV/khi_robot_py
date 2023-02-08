@@ -948,12 +948,6 @@ class khirolib():
         return -1
 
     def status_pc(self, threads=None):
-        self.robot_is_busy = True
-
-        if self.connection_mode == 'single':
-            if self.connect() == -1:
-                print("Can't establish connection with robot")
-                return -1000
 
         threads_num = []
         if threads is None:  # Check all threads
@@ -966,17 +960,32 @@ class khirolib():
                     if (element <= 5) and (element > 0):
                         if element in threads_num:
                             print("The num. of thread is duplicating")
+                            self.abort_connection()
+                            self.robot_is_busy = False
                             return -1
                         threads_num.append(element)
                     else:
                         print("Num of thread", element, "out of range: 1-5")
+                        self.abort_connection()
+                        self.robot_is_busy = False
                         return -1
                 else:
                     print("Num of thread should be int")
+                    self.abort_connection()
+                    self.robot_is_busy = False
                     return -1
         else:
             print("Threads type is illegal")
+            self.abort_connection()
+            self.robot_is_busy = False
             return -1
+
+        self.robot_is_busy = True
+
+        if self.connection_mode == 'single':
+            if self.connect() == -1:
+                print("Can't establish connection with robot")
+                return -1000
 
         # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
         pc_status_list = [None]*5
@@ -1018,7 +1027,7 @@ class khirolib():
             else:
                 pc_name = list_thread_name[0]
 
-            if (pc_name is not None) and (pc_status == 'Program is not running'):
+            if (pc_name is not None) and (pc_status == False):
                 pc_aborted = True
             else:
                 pc_aborted = False
@@ -1038,7 +1047,39 @@ class khirolib():
 
         self.robot_is_busy = False
 
-    def abort_pc(self, num_programs):
+    def abort_pc(self, threads=None):
+        threads_num = []
+        if threads is None:  # Check all threads
+            threads_num = [1, 2, 3, 4, 5]
+        elif type(threads) == int:
+            threads_num = [threads]
+        elif type(threads) == list:
+            for element in threads:
+                if type(element) == int:
+                    if (element <= 5) and (element > 0):
+                        if element in threads_num:
+                            print("The num. of thread is duplicating")
+                            self.abort_connection()
+                            self.robot_is_busy = False
+                            return -1
+                        threads_num.append(element)
+                    else:
+                        print("Num of thread", element, "out of range: 1-5")
+                        self.abort_connection()
+                        self.robot_is_busy = False
+                        return -1
+                else:
+                    print("Num of thread should be int")
+                    self.abort_connection()
+                    self.robot_is_busy = False
+                    return -1
+        else:
+            print("Threads type is illegal")
+            self.abort_connection()
+            self.robot_is_busy = False
+            return -1
+
+        self.robot_is_busy = True
 
         if self.connection_mode == 'single':
             if self.connect() == -1:
@@ -1062,23 +1103,236 @@ class khirolib():
                 self.robot_is_busy = False
                 return -1000
 
-        # PCABORT
-        self.server.sendall(b'PCABORT ' + bytes(str(1), "UTF-8") + b':')
+        # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
+        pc_abort_list = [None] * 5
+
+        for thread in threads_num:
+            # PCABORT
+            self.server.sendall(b'PCABORT ' + bytes(str(thread), "UTF-8") + b':')
+            self.server.sendall(b'\x0a')
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+
+                if receive_string.find(b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    result_msg = receive_string.decode("utf-8", 'ignore')
+                    break
+
+                if error_counter > error_counter_limit:
+                    print("PCABORT CTE")
+                    self.add_to_log("PCABORT CTE")
+                    self.abort_connection()
+                    self.robot_is_busy = False
+                    return -1000
+
+            pc_abort_list[thread-1] = result_msg
+
+        # print(pc_abort_list)
+
+    def execute_pc_program(self, program_name, thread):
+        #  Return:
+        # 1 - everything is ok
+        # 2 - XAC error detected (touch sensing error in welding robot)
+        # 3 - program HALT error detected
+        # 4 - program aborted
+        # -1000 - communication with robot was aborted
+
+        if type(thread) == int:
+            if (thread > 5) or (thread < 1):
+                print("Num of thread", thread, "out of range: 1-5")
+                self.robot_is_busy = False
+                return -1
+        else:
+            print("Thread should be int. number")
+            self.robot_is_busy = False
+            return -1
+
+        status = self.status_pc()[thread-1]
+        print("111", status, status['PCRUNNING'])
+
+        if status['PCRUNNING']:
+            print("Need to abort the thread:", thread)
+            self.abort_pc(threads=thread)
+            self.kill_pc(threads=thread)
+
+        self.robot_is_busy = True
+        self.abort_operation = False
+
+        if self.connection_mode == 'single':
+            if self.connect() == -1:
+                print("Can't establish connection with robot")
+                return -1000
+
+        # handshake
+        self.server.sendall(b'\x0a')
         error_counter = 0
         while True:
             error_counter += 1
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            print("ABORT", receive_string)
-            if receive_string.find(b'\x3a\x0d\x0a\x3e') >= 0:
+            if receive_string.find(b'\x0d\x0a\x3e') >= 0:
                 receive_string = self.server.recv(4096)
                 break
 
             if error_counter > error_counter_limit:
-                print("PCABORT CTE")
-                self.add_to_log("PCABORT CTE")
+                print("Execute - handshake error")
+                self.add_to_log("Execute handshake CTE")
                 self.abort_connection()
                 self.robot_is_busy = False
                 return -1000
+
+        # ERESET
+        self.server.sendall(b'ERESET')
+        self.server.sendall(b'\x0a')
+
+        error_counter = 0
+        while True:
+            error_counter += 1
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            if receive_string.find(b'state' + b'\x2e\x0d\x0a\x3e') >= 0:  # 'Cleared error state'
+                receive_string = self.server.recv(4096)
+                self.add_to_log("ERESET 1 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                break
+            if receive_string.find(b'ERESET' + b'\x0d\x0a\x3e') >= 0:  # 'ERESET' (without clear = not error)
+                receive_string = self.server.recv(4096)
+                self.add_to_log("ERESET 2 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                break
+
+            if error_counter > error_counter_limit:
+                self.add_to_log("Execute ERESET CTE")
+                print("Execute - ERESET error")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1000
+
+        # ZPOW ON
+        self.server.sendall(b'ZPOW ON')
+        self.server.sendall(b'\x0a')
+
+        error_counter = 0
+        while True:
+            error_counter += 1
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            if receive_string.find(b'\x0d\x0a\x3e') >= 0:     # This is AS monitor terminal..  Wait '>' sign from robot
+                receive_string = self.server.recv(4096)
+                self.add_to_log("ZPOW ON " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                break
+            if error_counter > error_counter_limit:
+                self.add_to_log("ZPOW ON CTE")
+                print("Execute - ZPOW ON error")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1000
+
+        # EXECUTE program
+        self.server.sendall(b'PCEXECUTE ' + bytes(str(thread), 'utf-8') + b':' + program_name.encode())
+        self.server.sendall(b'\x0a')
+
+        while True:
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            print(receive_string.decode("utf-8", 'ignore'), receive_string.hex())
+            if receive_string.find(b'\x0d\x0a\x3e') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
+                receive_string = self.server.recv(4096)
+                self.add_to_log("PC program run " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+                print(f"{bcolors.WARNING}PC program run{bcolors.ENDC}")
+
+                if self.connection_mode == 'single':
+                    self.abort_connection()
+
+                self.robot_is_busy = False
+                return 1
+
+    def kill_pc(self, threads=None):
+        threads_num = []
+        if threads is None:  # Check all threads
+            threads_num = [1, 2, 3, 4, 5]
+        elif type(threads) == int:
+            threads_num = [threads]
+        elif type(threads) == list:
+            for element in threads:
+                if type(element) == int:
+                    if (element <= 5) and (element > 0):
+                        if element in threads_num:
+                            print("The num. of thread is duplicating")
+                            self.abort_connection()
+                            self.robot_is_busy = False
+                            return -1
+                        threads_num.append(element)
+                    else:
+                        print("Num of thread", element, "out of range: 1-5")
+                        self.abort_connection()
+                        self.robot_is_busy = False
+                        return -1
+                else:
+                    print("Num of thread should be int")
+                    self.abort_connection()
+                    self.robot_is_busy = False
+                    return -1
+        else:
+            print("Threads type is illegal")
+            self.abort_connection()
+            self.robot_is_busy = False
+            return -1
+
+        self.robot_is_busy = True
+
+        if self.connection_mode == 'single':
+            if self.connect() == -1:
+                print("Can't establish connection with robot")
+                return -1000
+
+        # handshake
+        self.server.sendall(b'\x0a')
+        error_counter = 0
+        while True:
+            error_counter += 1
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            if receive_string.find(b'\x0d\x0a\x3e') >= 0:
+                receive_string = self.server.recv(4096)
+                break
+
+            if error_counter > error_counter_limit:
+                print("PCKILL - handshake error")
+                self.add_to_log("PCKILL handshake CTE")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1000
+
+        # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
+        pc_kill_list = [None] * 5
+
+        for thread in threads_num:
+
+            # PCKILL
+            self.server.sendall(b'PCKILL ' + bytes(str(thread), "UTF-8") + b':')
+            self.server.sendall(b'\x0a')
+
+            error_counter = 0
+            while True:
+                error_counter += 1
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+
+                if receive_string.find(b'\x0d\x0a\x3e') >= 0:
+                    receive_string = self.server.recv(4096)
+                    result_msg = receive_string.decode("utf-8", 'ignore')
+                    break
+
+                if receive_string.find(b'\x30\x29\x20') >= 0:  # Are you sure ? (Yes:1, No:0)?
+                    receive_string = self.server.recv(4096)
+                    tmp = bytes.fromhex('31 0a')  # Delete program and abort
+                    self.server.sendall(tmp)
+                    continue
+
+                if error_counter > error_counter_limit:
+                    print("PCKILL CTE")
+                    self.add_to_log("PCKILL CTE")
+                    self.abort_connection()
+                    self.robot_is_busy = False
+                    return -1000
+
+            pc_kill_list[thread-1] = result_msg
 
     def add_to_log(self, msg):
         if self.logging:
