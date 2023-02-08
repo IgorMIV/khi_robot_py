@@ -1035,7 +1035,7 @@ class khirolib():
             # print("Result msg:", list_of_strings)
 
             thread_dict = {"PCRUNNING": pc_status,
-                           "PCNAME:": pc_name,
+                           "PCNAME": pc_name,
                            "PCABORTED": pc_aborted}
 
             pc_status_list[thread-1] = thread_dict
@@ -1135,28 +1135,34 @@ class khirolib():
     def execute_pc_program(self, program_name, thread):
         #  Return:
         # 1 - everything is ok
-        # 2 - XAC error detected (touch sensing error in welding robot)
-        # 3 - program HALT error detected
-        # 4 - program aborted
         # -1000 - communication with robot was aborted
 
         if type(thread) == int:
             if (thread > 5) or (thread < 1):
+                print(f"{bcolors.FAIL}Error:{bcolors.ENDC}")
                 print("Num of thread", thread, "out of range: 1-5")
                 self.robot_is_busy = False
                 return -1
         else:
-            print("Thread should be int. number")
+            print(f"{bcolors.FAIL}Error:{bcolors.ENDC}")
+            print("Thread should be integer number")
             self.robot_is_busy = False
             return -1
 
-        status = self.status_pc()[thread-1]
-        print("111", status, status['PCRUNNING'])
+        status = self.status_pc()
 
-        if status['PCRUNNING']:
-            print("Need to abort the thread:", thread)
-            self.abort_pc(threads=thread)
-            self.kill_pc(threads=thread)
+        kill_list = []
+
+        for i in range(len(status)):
+            thread_status = status[i]
+            if thread_status['PCNAME'] == program_name:
+                kill_list.append(i+1)
+
+        if thread not in kill_list:
+            kill_list.append(thread)
+
+        self.abort_pc(threads=kill_list)
+        self.kill_pc(threads=kill_list)
 
         self.robot_is_busy = True
         self.abort_operation = False
@@ -1177,7 +1183,7 @@ class khirolib():
                 break
 
             if error_counter > error_counter_limit:
-                print("Execute - handshake error")
+                print("PCEXECUTE - handshake error")
                 self.add_to_log("Execute handshake CTE")
                 self.abort_connection()
                 self.robot_is_busy = False
@@ -1207,24 +1213,24 @@ class khirolib():
                 self.robot_is_busy = False
                 return -1000
 
-        # ZPOW ON
-        self.server.sendall(b'ZPOW ON')
-        self.server.sendall(b'\x0a')
-
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'\x0d\x0a\x3e') >= 0:     # This is AS monitor terminal..  Wait '>' sign from robot
-                receive_string = self.server.recv(4096)
-                self.add_to_log("ZPOW ON " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                break
-            if error_counter > error_counter_limit:
-                self.add_to_log("ZPOW ON CTE")
-                print("Execute - ZPOW ON error")
-                self.abort_connection()
-                self.robot_is_busy = False
-                return -1000
+        # # ZPOW ON
+        # self.server.sendall(b'ZPOW ON')
+        # self.server.sendall(b'\x0a')
+        #
+        # error_counter = 0
+        # while True:
+        #     error_counter += 1
+        #     receive_string = self.server.recv(4096, socket.MSG_PEEK)
+        #     if receive_string.find(b'\x0d\x0a\x3e') >= 0:     # This is AS monitor terminal..  Wait '>' sign from robot
+        #         receive_string = self.server.recv(4096)
+        #         self.add_to_log("ZPOW ON " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+        #         break
+        #     if error_counter > error_counter_limit:
+        #         self.add_to_log("ZPOW ON CTE")
+        #         print("Execute - ZPOW ON error")
+        #         self.abort_connection()
+        #         self.robot_is_busy = False
+        #         return -1000
 
         # EXECUTE program
         self.server.sendall(b'PCEXECUTE ' + bytes(str(thread), 'utf-8') + b':' + program_name.encode())
@@ -1232,7 +1238,7 @@ class khirolib():
 
         while True:
             receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            print(receive_string.decode("utf-8", 'ignore'), receive_string.hex())
+            # print(receive_string.decode("utf-8", 'ignore'), receive_string.hex())
             if receive_string.find(b'\x0d\x0a\x3e') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
                 receive_string = self.server.recv(4096)
                 self.add_to_log("PC program run " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
