@@ -877,12 +877,41 @@ class khirolib():
         tmp = bytes.fromhex('02 41 20 20 20 20 30 17')
         self.server.sendall(tmp)
 
+        while True:
+            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            if receive_string.find(b'Loading...(using.rcc)' + b'\x0d\x0a') >= 0:  # package receive
+                tmp_buffer = self.server.recv(4096)
+                break
+
+            if receive_string.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'
+                tmp_buffer = self.server.recv(4096)
+                self.add_to_log("SAVE/LOAD in progress.")
+                print("SAVE/LOAD in progress.")
+
+                if self.connection_mode == 'single':
+                    self.abort_connection()
+
+                return -1
+
         # File transmission
+        input_buffer = b''
         i = 0
-        upload_success = True
+
         for byte_package in file_packages:
-            if upload_success:
-                self.server.sendall(byte_package)
+            self.server.sendall(byte_package)
+            while True:
+                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+
+                if receive_string.find(b'\x05\x02\x43\x17') >= 0:  # package receive
+                    tmp_buffer = self.server.recv(4096)
+                    break
+
+                if receive_string.find(b'\x72\x74\x29\x0d\x0a') >= 0:  # End of 'abort)'
+                    tmp_buffer = self.server.recv(4096)
+                    self.add_to_log("Delete program and abort")
+                    input_buffer += tmp_buffer
+                    self.server.sendall(b'\x30\x0a')
+                    continue
 
         tmp = bytes.fromhex('02 43 20 20 20 20 30 1a 17')  # 9
         self.server.sendall(tmp)
@@ -890,7 +919,6 @@ class khirolib():
         tmp = bytes.fromhex('02 45 20 20 20 20 30 17')  # Cancel loading mode
         self.server.sendall(tmp)
 
-        input_buffer = b''
         error_counter = 0
         while True:
             error_counter += 1
@@ -909,16 +937,6 @@ class khirolib():
                 self.add_to_log("File load completed. (n errors)")
                 input_buffer += tmp_buffer
                 break
-
-            if receive_string.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'
-                tmp_buffer = self.server.recv(4096)
-                self.add_to_log("SAVE/LOAD in progress.")
-                print("SAVE/LOAD in progress.")
-
-                if self.connection_mode == 'single':
-                    self.abort_connection()
-
-                return -1
 
         split_message = input_buffer.decode("utf-8", 'ignore').split(" ")
 
@@ -1047,37 +1065,58 @@ class khirolib():
 
         self.robot_is_busy = False
 
-    def abort_pc(self, threads=None):
-        threads_num = []
-        if threads is None:  # Check all threads
-            threads_num = [1, 2, 3, 4, 5]
-        elif type(threads) == int:
-            threads_num = [threads]
-        elif type(threads) == list:
-            for element in threads:
-                if type(element) == int:
-                    if (element <= 5) and (element > 0):
-                        if element in threads_num:
-                            print("The num. of thread is duplicating")
+    def abort_pc(self, program_name=None, threads=None):
+        # type(list) - [None, 'aborted', 'not_running', None, 'not_running']
+        # None - if don't know about this process
+        # 'aborted' - PC program aborted success
+        # 'not_running' - PC program not running
+        #
+        # -1 - illegal input parameters
+        # -1000 - communication error
+
+        if (program_name is not None) and (threads is not None):
+            print(f"{bcolors.FAIL}Error:{bcolors.ENDC}")
+            print("Abort program by name and by thread number doesn't support")
+            return -1
+
+        abort_num = []
+
+        if program_name is None:
+            if threads is None:  # Check all threads
+                abort_num = [1, 2, 3, 4, 5]
+            elif type(threads) == int:
+                abort_num = [threads]
+            elif type(threads) == list:
+                for element in threads:
+                    if type(element) == int:
+                        if (element <= 5) and (element > 0):
+                            if element in abort_num:
+                                print("The num. of thread is duplicating")
+                                self.abort_connection()
+                                self.robot_is_busy = False
+                                return -1
+                            abort_num.append(element)
+                        else:
+                            print("Num of thread", element, "out of range: 1-5")
                             self.abort_connection()
                             self.robot_is_busy = False
                             return -1
-                        threads_num.append(element)
                     else:
-                        print("Num of thread", element, "out of range: 1-5")
+                        print("Num of thread should be int")
                         self.abort_connection()
                         self.robot_is_busy = False
                         return -1
-                else:
-                    print("Num of thread should be int")
-                    self.abort_connection()
-                    self.robot_is_busy = False
-                    return -1
-        else:
-            print("Threads type is illegal")
-            self.abort_connection()
-            self.robot_is_busy = False
-            return -1
+            else:
+                print("Threads type is illegal")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1
+        else:  # Program name is not none
+            pc_status = self.status_pc()
+            for i in range(len(pc_status)):
+                process = pc_status[i]
+                if process['PCNAME'] == program_name:
+                    abort_num.append(i+1)
 
         self.robot_is_busy = True
 
@@ -1106,7 +1145,7 @@ class khirolib():
         # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
         pc_abort_list = [None] * 5
 
-        for thread in threads_num:
+        for thread in abort_num:
             # PCABORT
             self.server.sendall(b'PCABORT ' + bytes(str(thread), "UTF-8") + b':')
             self.server.sendall(b'\x0a')
@@ -1115,7 +1154,7 @@ class khirolib():
             while True:
                 error_counter += 1
                 receive_string = self.server.recv(4096, socket.MSG_PEEK)
-
+                # print("RCV", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
                 if receive_string.find(b'\x0d\x0a\x3e') >= 0:
                     receive_string = self.server.recv(4096)
                     result_msg = receive_string.decode("utf-8", 'ignore')
@@ -1128,9 +1167,12 @@ class khirolib():
                     self.robot_is_busy = False
                     return -1000
 
-            pc_abort_list[thread-1] = result_msg
+            if result_msg.find('PC program aborted.No') >= 0:
+                pc_abort_list[thread-1] = 'aborted'
+            else:
+                pc_abort_list[thread - 1] = 'not_running'
 
-        # print(pc_abort_list)
+        return pc_abort_list
 
     def execute_pc_program(self, program_name, thread):
         #  Return:
@@ -1213,25 +1255,6 @@ class khirolib():
                 self.robot_is_busy = False
                 return -1000
 
-        # # ZPOW ON
-        # self.server.sendall(b'ZPOW ON')
-        # self.server.sendall(b'\x0a')
-        #
-        # error_counter = 0
-        # while True:
-        #     error_counter += 1
-        #     receive_string = self.server.recv(4096, socket.MSG_PEEK)
-        #     if receive_string.find(b'\x0d\x0a\x3e') >= 0:     # This is AS monitor terminal..  Wait '>' sign from robot
-        #         receive_string = self.server.recv(4096)
-        #         self.add_to_log("ZPOW ON " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-        #         break
-        #     if error_counter > error_counter_limit:
-        #         self.add_to_log("ZPOW ON CTE")
-        #         print("Execute - ZPOW ON error")
-        #         self.abort_connection()
-        #         self.robot_is_busy = False
-        #         return -1000
-
         # EXECUTE program
         self.server.sendall(b'PCEXECUTE ' + bytes(str(thread), 'utf-8') + b':' + program_name.encode())
         self.server.sendall(b'\x0a')
@@ -1250,37 +1273,57 @@ class khirolib():
                 self.robot_is_busy = False
                 return 1
 
-    def kill_pc(self, threads=None):
-        threads_num = []
-        if threads is None:  # Check all threads
-            threads_num = [1, 2, 3, 4, 5]
-        elif type(threads) == int:
-            threads_num = [threads]
-        elif type(threads) == list:
-            for element in threads:
-                if type(element) == int:
-                    if (element <= 5) and (element > 0):
-                        if element in threads_num:
-                            print("The num. of thread is duplicating")
+    def kill_pc(self, program_name=None, threads=None):
+        # type(list) - [None, 'killed', 'not_killed', None, None]
+        # None - Don't know about this process
+        # 'killed' - PC program killed success
+        # 'not_running' - PC program not running
+        #
+        # -1 - illegal input parameters
+        # -1000 - communication error
+
+        if (program_name is not None) and (threads is not None):
+            print(f"{bcolors.FAIL}Error:{bcolors.ENDC}")
+            print("Kill program by name and by thread number doesn't support")
+            return -1
+
+        kill_num = []
+        if program_name is None:
+            if threads is None:  # Check all threads
+                kill_num = [1, 2, 3, 4, 5]
+            elif type(threads) == int:
+                kill_num = [threads]
+            elif type(threads) == list:
+                for element in threads:
+                    if type(element) == int:
+                        if (element <= 5) and (element > 0):
+                            if element in kill_num:
+                                print("The num. of thread is duplicating")
+                                self.abort_connection()
+                                self.robot_is_busy = False
+                                return -1
+                            kill_num.append(element)
+                        else:
+                            print("Num of thread", element, "out of range: 1-5")
                             self.abort_connection()
                             self.robot_is_busy = False
                             return -1
-                        threads_num.append(element)
                     else:
-                        print("Num of thread", element, "out of range: 1-5")
+                        print("Num of thread should be int")
                         self.abort_connection()
                         self.robot_is_busy = False
                         return -1
-                else:
-                    print("Num of thread should be int")
-                    self.abort_connection()
-                    self.robot_is_busy = False
-                    return -1
+            else:
+                print("Threads type is illegal")
+                self.abort_connection()
+                self.robot_is_busy = False
+                return -1
         else:
-            print("Threads type is illegal")
-            self.abort_connection()
-            self.robot_is_busy = False
-            return -1
+            pc_status = self.status_pc()
+            for i in range(len(pc_status)):
+                process = pc_status[i]
+                if process['PCNAME'] == program_name:
+                    kill_num.append(i+1)
 
         self.robot_is_busy = True
 
@@ -1309,7 +1352,7 @@ class khirolib():
         # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
         pc_kill_list = [None] * 5
 
-        for thread in threads_num:
+        for thread in kill_num:
 
             # PCKILL
             self.server.sendall(b'PCKILL ' + bytes(str(thread), "UTF-8") + b':')
@@ -1320,9 +1363,11 @@ class khirolib():
                 error_counter += 1
                 receive_string = self.server.recv(4096, socket.MSG_PEEK)
 
+                print("RCV", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
+
                 if receive_string.find(b'\x0d\x0a\x3e') >= 0:
                     receive_string = self.server.recv(4096)
-                    result_msg = receive_string.decode("utf-8", 'ignore')
+                    result_msg = receive_string
                     break
 
                 if receive_string.find(b'\x30\x29\x20') >= 0:  # Are you sure ? (Yes:1, No:0)?
@@ -1338,7 +1383,15 @@ class khirolib():
                     self.robot_is_busy = False
                     return -1000
 
-            pc_kill_list[thread-1] = result_msg
+            if result_msg.find(b'Cannot KILL program that is running.') >= 0:
+                pc_kill_list[thread - 1] = 'not_killed'
+            elif result_msg.find(b'\x31\x0d\x0a\x3e'.decode("utf-8", 'ignore')):
+                pc_kill_list[thread - 1] = 'killed'
+            else:
+                pc_kill_list[thread - 1] = 'unknown'
+                print("AA", result_msg)
+
+        return pc_kill_list
 
     def add_to_log(self, msg):
         if self.logging:
