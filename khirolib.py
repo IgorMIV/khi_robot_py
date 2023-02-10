@@ -177,12 +177,6 @@ class khirolib():
                 print("You couldn't use loading from file and from string in the same time")
                 return -2
 
-        # pc_status = self.status_pc()
-        # for i in range(len(pc_status)):
-        #     process = pc_status[i]
-        #     if process['PCNAME'] == program_name:
-        #         abort_num.append(i + 1)
-
         self.robot_is_busy = True
 
         footer_message = bytes.fromhex('0a')
@@ -195,7 +189,7 @@ class khirolib():
             file_string = first_line + f.read()
 
             program_name = first_line.split(' ')[1].split('(')[0]
-            abort_prog = self.abort_pc(program_name=program_name)
+            abort_prog = self.abort_pc(program_name=program_name, silent=True)
             kill_prog = self.kill_pc(program_name=program_name)
         else:
             file_string = '.PROGRAM ' + program_name + '\n'
@@ -205,7 +199,6 @@ class khirolib():
         file = bytes(file_string, 'utf-8') + bytes.fromhex('0d 0a')
         num_packages = math.ceil(len(file) / 2910)
         file_packages = []
-
         for i in range(num_packages):
             pckg = bytes.fromhex('02 43 20 20 20 20 30') + \
                    file[i * 2910:(i + 1) * 2910] + \
@@ -367,9 +360,11 @@ class khirolib():
                 self.server.sendall(byte_package)
                 while True:
                     receive_string = self.server.recv(4096, socket.MSG_PEEK)
-
+                    self.add_to_log("RCVF " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                     if receive_string.find(b'\x05\x02\x43\x17') >= 0:  # package receive
                         tmp_buffer = self.server.recv(4096)
+                        segment_pos = tmp_buffer.find(b'\x05\x02\x43\x17')
+                        input_buffer = tmp_buffer[segment_pos + len(b'\x05\x02\x43\x17'):]
                         break
 
                     if receive_string.find(b'\x72\x74\x29\x0d\x0a') >= 0:  # End of 'abort)'
@@ -536,7 +531,7 @@ class khirolib():
 
         self.robot_is_busy = False
 
-    def abort_pc(self, program_name=None, threads=None):
+    def abort_pc(self, program_name=None, threads=None, silent=False):
         # type(list) - [None, 'aborted', 'not_running', None, 'not_running']
         # None - if don't know about this process
         # 'aborted' - PC program aborted success
@@ -590,7 +585,8 @@ class khirolib():
                     abort_num.append(i+1)
 
         if not abort_num:
-            print("PC program not found")
+            if not silent:
+                print("PC program not found")
             return -1
 
         self.robot_is_busy = True
@@ -667,9 +663,7 @@ class khirolib():
             return -1
 
         status = self.status_pc()
-
         kill_list = []
-
         for i in range(len(status)):
             thread_status = status[i]
             if thread_status['PCNAME'] == program_name:
