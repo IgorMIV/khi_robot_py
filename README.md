@@ -22,6 +22,11 @@ See example.py file.
 **If anyone knows how to remove the error 'P2076' 'SAVE/LOAD in progress' - please write issue!**
 #
 
+## Library installation
+```
+python3 -m pip install --user git+https://github.com/IgorMIV/khi_robot_py
+```
+
 Working modes (_connection_mode_ argument):
 - _single_ mode - every command requires reconnection
 * _continuous_ mode - robot always connected to PC
