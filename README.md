@@ -26,7 +26,7 @@ Working modes (_connection_mode_ argument):
 - _single_ mode - every command requires reconnection
 * _continuous_ mode - robot always connected to PC
 
-## Install
+## Obtaining
 ```
 git clone https://github.com/IgorMIV/khi_robot_py.git
 cd khi_robot_py
