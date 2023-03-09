@@ -250,11 +250,6 @@ class khirolib():
                 while True:
                     receive_string = self.server.recv(4096, socket.MSG_PEEK)
                     self.add_to_log("RCVF " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                    if receive_string.find(b'\x05\x02\x43\x17') >= 0:  # package receive
-                        tmp_buffer = self.server.recv(4096)
-                        segment_pos = tmp_buffer.find(b'\x05\x02\x43\x17')
-                        input_buffer = tmp_buffer[segment_pos + len(b'\x05\x02\x43\x17'):]
-                        break
 
                     if receive_string.find(b'\x72\x74\x29') >= 0:  # End of 'abort)'
                         tmp_buffer = self.server.recv(4096)
@@ -267,6 +262,13 @@ class khirolib():
                         tmp_buffer = self.server.recv(4096)
                         error_not_found = False
                         break
+
+                    if receive_string.find(b'\x05\x02\x43\x17') >= 0:  # package receive
+                        tmp_buffer = self.server.recv(4096)
+                        segment_pos = tmp_buffer.find(b'\x05\x02\x43\x17')
+                        input_buffer = tmp_buffer[segment_pos + len(b'\x05\x02\x43\x17'):]
+                        break
+
 
                     # if self.abort_operation:
                     #     self.abort_connection()
@@ -288,7 +290,7 @@ class khirolib():
                 tmp_buffer = self.server.recv(4096)
                 self.add_to_log("Delete program and abort")
                 input_buffer += tmp_buffer
-                self.server.sendall(b'\x30\x0a')
+                self.server.sendall(b'\x31\x0a')
                 continue
 
             if receive_string.find(b'\x73\x29\x0d\x0a\x3e') >= 0:  # End of 'errors)'
