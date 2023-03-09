@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(name='khirolib',
-        version='0.0.2',
+        version='0.0.3',
         description='Kawasaki robot control with Py',
         packages=find_packages(include=[
             'khirolib',
