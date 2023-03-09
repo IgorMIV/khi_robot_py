@@ -232,7 +232,7 @@ class khirolib():
                 print("SAVE/LOAD in progress.")
 
                 if self.connection_mode == 'single':
-                    self.abort_connection()
+                    self.close_connection()
 
                 return -1
 
@@ -306,7 +306,7 @@ class khirolib():
             print("File transmission complete")
 
             if self.connection_mode == 'single':
-                self.abort_connection()
+                self.close_connection()
             self.robot_is_busy = False
 
             return None
@@ -318,7 +318,7 @@ class khirolib():
             print("-----------------")
 
         if self.connection_mode == 'single':
-            self.abort_connection()
+            self.close_connection()
 
         self.robot_is_busy = False
 
@@ -361,7 +361,6 @@ class khirolib():
             self.abort_connection()
             self.robot_is_busy = False
             return -1
-
         self.robot_is_busy = True
 
         if self.connection_mode == 'single':
@@ -412,7 +411,7 @@ class khirolib():
             pc_status_list[thread-1] = status
 
         if self.connection_mode == 'single':
-            self.abort_connection()
+            self.close_connection()
 
         self.robot_is_busy = False
 
@@ -583,7 +582,7 @@ class khirolib():
                 print(f"{bcolors.FAIL}" + "Program " + program_name + " does not exist" + f"{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
-                    self.abort_connection()
+                    self.close_connection()
 
                 self.robot_is_busy = False
                 return -1
@@ -594,7 +593,7 @@ class khirolib():
                 print(f"{bcolors.WARNING}" + "PC " + program_name + " run" + f"{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
-                    self.abort_connection()
+                    self.close_connection()
 
                 self.robot_is_busy = False
                 return 1
@@ -789,7 +788,7 @@ class khirolib():
                 print(f"{bcolors.FAIL}" + "Program " + program_name + " does not exist" + f"{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
-                    self.abort_connection()
+                    self.close_connection()
 
                 self.robot_is_busy = False
                 return -1
@@ -800,7 +799,7 @@ class khirolib():
                 print(f"{bcolors.FAIL}Pendant in teach mode{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
-                    self.abort_connection()
+                    self.close_connection()
 
                 self.robot_is_busy = False
                 return -1
@@ -814,7 +813,7 @@ class khirolib():
 
                 if not wait_complete:
                     if self.connection_mode == 'single':
-                        self.abort_connection()
+                        self.close_connection()
 
                     self.robot_is_busy = False
                     return 1
@@ -827,7 +826,7 @@ class khirolib():
                 print(f"{bcolors.WARNING}" + "RCP " + program_name + " completed" + f"{bcolors.ENDC}")
 
                 if self.connection_mode == 'single':
-                    self.abort_connection()
+                    self.close_connection()
 
                 self.robot_is_busy = False
                 return 2
