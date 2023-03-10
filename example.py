@@ -1,7 +1,7 @@
 from khirolib import *
 
 IP = "127.0.0.1"    # IP for K-Roset
-PORT = 9105         # Port for K-Roset
+PORT = 9105         # Port for K-Roset22222222222222222
 
 robot = khirolib(IP, PORT, connection_mode='single', log=True)
 
