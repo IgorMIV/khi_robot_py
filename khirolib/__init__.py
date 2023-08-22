@@ -1,6 +1,9 @@
 import socket
+import select
 import time
 import math
+
+from PyQt6.QtCore import QTimer
 
 error_counter_limit = 1000000
 footer_message = bytes.fromhex('0a')
@@ -22,132 +25,132 @@ class khirolib():
         self.ip_address = ip
         self.port_number = port
         self.logging = log
+        self.server = None
+
+        self._connectionEstablished = False
+
+        self.command_buffer = None
 
         if self.logging:
             self.logfile = open("log.txt", "w")
             self.logfile.write(str(time.time()) + ":" + "Log started" + '\n')
 
-        self.server = None
-
-        if connection_mode == 'continuous':
-            if self.connect() < 0:
-                print(f"{bcolors.WARNING}Can't establish connection with robot."
-                      f" Continue in single connection mode{bcolors.ENDC}")
-                self.connection_mode = 'single'
-                self.add_to_log("Can't connect to robot continuously, set single mode")
-            else:
-                self.connection_mode = 'continuous'
-                self.add_to_log("Connection mode - continuous")
-
-        elif connection_mode == 'single':
-            self.connection_mode = 'single'
-            self.add_to_log("Connection mode - single")
-
-        else:
-            print(f"{bcolors.WARNING}Can't find this connection mode."
-                  f" Continue in single connection mode{bcolors.ENDC}")
-            self.connection_mode = 'single'
-
         self.robot_is_busy = False
-        self.abort_operation = False
+
+        if self.connect() != 1:
+            print("Can't establish connection with robot")
+        else:
+            self.timer = QTimer()
+            self.timer.setInterval(100)
+            self.timer.timeout.connect(self.timer_timeout)
+            self.timer.start()
+            self._connectionEstablished = True
+
+    def timer_timeout(self):
+        if self.command_buffer is not None:
+            if self.command_buffer == '':
+                self.server.sendall(footer_message)
+            else:
+                self.server.sendall(self.command_buffer.encode())
+                self.server.sendall(footer_message)
+
+            self.command_buffer = None
+
+        try:
+            ready_to_read, ready_to_write, in_error = select.select([self.server, ], [], [], 0.01)
+        except select.error:
+            print('Transmission error')
+        else:
+            if len(in_error) > 0:
+                return -1
+            if len(ready_to_read) > 0:
+                try:
+                    recv = self.server.recv(4096)
+                except:
+                    print('Receive error')
+
+                # self.parent.print_text(recv.decode("utf-8", 'ignore'))
+                print(recv.decode("utf-8", 'ignore'))
 
     def connect(self):
-        #  Return:
-        # 1 - without errors
-        # -1000 - communication with robot was aborted
+        #     #  Return:
+        #     # 1 - without errors
+        #     # -1000 - communication with robot was aborted
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.connect((self.ip_address, self.port_number))
 
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'login:') > -1:     # Wait 'login:' message from robot
-                receive_string = self.server.recv(4096)
-                self.add_to_log("Robot->PC 1 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                break
-            if error_counter > error_counter_limit:
-                self.add_to_log("Robot->PC CTE 1" + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                print("Connection timeout error - 1")
-                self.server.close()
-                return -1000
+        kawasaki_msg = self.wait_recv([b'login:'], timeout=1)
+        # self.parent.print_text(kawasaki_msg.decode("utf-8", 'ignore'))
 
         self.server.sendall(b'as')
         self.server.sendall(b'\x0d\x0a')
 
-        error_counter = 0
+        kawasaki_msg = self.wait_recv([b'\x3e'], timeout=1)
+        # self.parent.print_text(kawasaki_msg.decode("utf-8", 'ignore'))
+
+        return 1
+
+    def send_command(self, command):
+        self.command_buffer = command
+
+    def wait_recv(self, ends_list, timeout=0.01):
+        break_actual = False
         while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'\x3e') > -1:     # This is AS monitor terminal..  Wait '>' sign from robot
-                receive_string = self.server.recv(4096)
-                self.add_to_log("Robot->PC 2 " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                return 1
-            if error_counter > error_counter_limit:
-                self.add_to_log("Robot->PC CTE 2" + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                print("Connection timeout error - 2")
-                self.server.close()
-                return -1000
+            try:
+                ready_to_read, ready_to_write, in_error = select.select([self.server, ], [], [], timeout)
+            except select.error:
+                print('Transmission error')
+            else:
+                if len(in_error) > 0:
+                    print('Transmission error')
+                    return -1
+                if len(ready_to_read) > 0:
+                    incoming = b''
+                    while True:
+                        if break_actual:
+                            break
+                        try:
+                            recv = self.server.recv(1)
+                        except:
+                            print('Transmission error')
+                            break_actual = True
+                            break
+                        if recv == b'':
+                            break
+                        incoming += recv
+                        for eom in ends_list:
+                            if incoming.find(eom) > -1:     # Wait eom message from robot
+                                break_actual = True
+                                break
+            if break_actual:
+                break
+        # print(incoming)
+        return incoming
+
+    def is_connection_established(self):
+        return self._connectionEstablished
+
+    def disconnect(self):
+        if self.server is not None:
+            self.timer.stop()
+            self.close_connection()
+            self._connectionEstablished = False
 
     def close_connection(self):
         self.add_to_log("Close connection")
         self.server.close()
 
-    def abort_connection(self):
-        if self.connection_mode == 'continuous':
-            self.connection_mode = 'single'
-            self.add_to_log("Abort connection")
-        self.server.close()
-        self.robot_is_busy = False
-        self.abort_operation = False
-        print("STOP")
-
     def ereset(self):
-        # 1 - everything is ok
-        # -1000 - communication with robot was aborted
+        # # 1 - everything is ok
+        # # -1000 - communication with robot was aborted
+        command = "ERESET"
+        self.server.sendall(command.encode())
+        self.server.sendall(footer_message)
 
-        self.robot_is_busy = True
-
-        if self.connection_mode == 'single':
-            if self.connect() < 0:
-                print("Can't establish connection with robot")
-                return -1000
-
-        if self._handshake() < 0:
-            return -1000
-
-        # ERESET
-        self.server.sendall(b'ERESET')
-        self.server.sendall(b'\x0a')
-
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-
-            if receive_string.find(b'state' + b'\x2e\x0d\x0a\x3e') >= 0:  # 'Cleared error state'
-                receive_string = self.server.recv(4096)
-                break
-
-            if receive_string.find(b'ERESET' + b'\x0d\x0a\x3e') >= 0:  # 'ERESET' (without clear = not error)
-                receive_string = self.server.recv(4096)
-                break
-
-            if error_counter > error_counter_limit:
-                print("ERESET timeout error")
-                self.abort_connection()
-                return -1000
-
-            if self.abort_operation:
-                self.abort_connection()
-                return -1000
-
-        if self.connection_mode == 'single':
-            self.close_connection()
-
-        self.robot_is_busy = False
-        return 1
+        kawasaki_msg = self.wait_recv([b'\x3e'], timeout=1)
+        print(kawasaki_msg.decode("utf-8", 'ignore'))
+        # self.parent.print_text(kawasaki_msg.decode("utf-8", 'ignore'))
 
     def upload_program(self, filename=None, program_name=None, program_text=None):
         #  None - everything is OK
@@ -193,25 +196,19 @@ class khirolib():
             if self.kill_rcp(standalone=False) < 0:
                 return -1
 
-        status_pc_list = self.status_pc()
-        for i in range(len(status_pc_list)):
-            status_pc = status_pc_list[i]
-            if status_pc['program_name'] == program_name:
-                if status_pc['pc_status'] == 'Program running':
-                    if self.abort_pc(threads=i+1)[i] is None:
-                        print("Abort failure")
-                        return -1
-                self.kill_pc(threads=i+1)
-                # if self.kill_pc(program_name=program_name) < 0:
-                #     return -1
+        # status_pc_list = self.status_pc()
+        # for i in range(len(status_pc_list)):
+        #     status_pc = status_pc_list[i]
+        #     if status_pc['program_name'] == program_name:
+        #         if status_pc['pc_status'] == 'Program running':
+        #             if self.abort_pc(threads=i+1)[i] is None:
+        #                 print("Abort failure")
+        #                 return -1
+        #         self.kill_pc(threads=i+1)
+        #         # if self.kill_pc(program_name=program_name) < 0:
+        #         #     return -1
 
         self.robot_is_busy = True
-
-        if self.connection_mode == 'single':
-            # Connect to robot in single mode
-            if self.connect() == -1:
-                print("Can't establish connection with robot")
-                return -1000
 
         # Enable loading mode
         self.server.sendall("LOAD using.rcc".encode())
@@ -220,59 +217,36 @@ class khirolib():
         tmp = bytes.fromhex('02 41 20 20 20 20 30 17')
         self.server.sendall(tmp)
 
-        while True:
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'Loading...(using.rcc)' + b'\x0d\x0a') >= 0:  # package receive
-                tmp_buffer = self.server.recv(4096)
-                break
+        kawasaki_msg = self.wait_recv([b'Loading...(using.rcc)' + b'\x0d\x0a',         # package receive
+                                       b'\x65\x73\x73\x2e\x0d\x0a\x3e'], timeout=1)    # End of 'SAVE/LOAD in progress.'
 
-            if receive_string.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'
-                tmp_buffer = self.server.recv(4096)
-                self.add_to_log("SAVE/LOAD in progress.")
-                print("SAVE/LOAD in progress.")
-
-                if self.connection_mode == 'single':
-                    self.close_connection()
-
-                return -1
-
-            if self.abort_operation:
-                self.abort_connection()
-                return -1000
+        if kawasaki_msg.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'
+            self.add_to_log("SAVE/LOAD in progress.")
+            print("SAVE/LOAD in progress.")
+            return -1
 
         # File transmission
-        input_buffer = b''
-        i = 0
         error_not_found = True
         for byte_package in file_packages:
             if error_not_found:
                 self.server.sendall(byte_package)
-                while True:
-                    receive_string = self.server.recv(4096, socket.MSG_PEEK)
-                    self.add_to_log("RCVF " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
 
-                    if receive_string.find(b'\x72\x74\x29') >= 0:  # End of 'abort)'
-                        tmp_buffer = self.server.recv(4096)
+                while True:
+                    kawasaki_msg = self.wait_recv([b'\x72\x74\x29',                     # End of 'abort)'
+                                                   b'\x05\x02\x45\x17',                 # abort transmission
+                                                   b'\x05\x02\x43\x17'], timeout=1)     # package receive
+
+                    if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
                         self.add_to_log("Error in program found")
-                        input_buffer += tmp_buffer
                         self.server.sendall(b'\x31\x0a')  # 31 - discard program and delete
                         continue
 
-                    if receive_string.find(b'\x05\x02\x45\x17') >= 0:  # abort transmission
-                        tmp_buffer = self.server.recv(4096)
+                    if kawasaki_msg.find(b'\x05\x02\x45\x17') >= 0:
                         error_not_found = False
                         break
 
-                    if receive_string.find(b'\x05\x02\x43\x17') >= 0:  # package receive
-                        tmp_buffer = self.server.recv(4096)
-                        segment_pos = tmp_buffer.find(b'\x05\x02\x43\x17')
-                        input_buffer = tmp_buffer[segment_pos + len(b'\x05\x02\x43\x17'):]
+                    if kawasaki_msg.find(b'\x05\x02\x43\x17') >= 0:
                         break
-
-
-                    # if self.abort_operation:
-                    #     self.abort_connection()
-                    #     return -1000
 
         tmp = bytes.fromhex('02 43 20 20 20 20 30 1a 17')  # 9
         self.server.sendall(tmp)
@@ -280,35 +254,28 @@ class khirolib():
         tmp = bytes.fromhex('02 45 20 20 20 20 30 17')  # Cancel loading mode
         self.server.sendall(tmp)
 
-        error_counter = 0
+        input_buffer = ""
         while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            self.add_to_log("RCV " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
+            kawasaki_msg = self.wait_recv([b'\x72\x74\x29',                         # End of 'abort)'
+                                           b'\x73\x29\x0d\x0a\x3e'], timeout=1)     # End of 'errors)'
+            input_buffer += kawasaki_msg.decode("utf-8", 'ignore')
 
-            if receive_string.find(b'\x72\x74\x29') >= 0:  # End of 'abort)'  (\x0d\x0a)
-                tmp_buffer = self.server.recv(4096)
-                self.add_to_log("Delete program and abort")
-                input_buffer += tmp_buffer
-                self.server.sendall(b'\x31\x0a')
+            if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
+                self.add_to_log("Error in program found")
+                self.server.sendall(b'\x31\x0a')  # 31 - discard program and delete
                 continue
 
-            if receive_string.find(b'\x73\x29\x0d\x0a\x3e') >= 0:  # End of 'errors)'
-                tmp_buffer = self.server.recv(4096)
+            if kawasaki_msg.find(b'\x73\x29\x0d\x0a\x3e') >= 0:
                 self.add_to_log("File load completed. (n errors)")
-                input_buffer += tmp_buffer
                 break
 
-        split_message = input_buffer.decode("utf-8", 'ignore').split(" ")
+        split_message = input_buffer.split(" ")
 
         if len(split_message) > 2:
             num_errors = int(split_message[-2][1:])
 
         if num_errors == 0:
             print("File transmission complete")
-
-            if self.connection_mode == 'single':
-                self.close_connection()
             self.robot_is_busy = False
 
             return None
@@ -319,12 +286,20 @@ class khirolib():
             print("Num errors:", num_errors)
             print("-----------------")
 
-        if self.connection_mode == 'single':
-            self.close_connection()
-
         self.robot_is_busy = False
 
         return -1
+
+    def delete_program(self, program_name):
+        self.server.sendall(("DELETE/P/D " + program_name).encode())
+        self.server.sendall(footer_message)
+
+        kawasaki_msg = self.wait_recv([b'\x30\x29\x20'], timeout=1)     # Are you sure ? (Yes:1, No:0)?
+
+        self.server.sendall(b'\x31')
+        self.server.sendall(footer_message)
+
+        kawasaki_msg = self.wait_recv([b'\x31\x0d\x0a\x3e'], timeout=1)
 
     def status_pc(self, threads=None):
         # -1000 - connection error
@@ -838,46 +813,13 @@ class khirolib():
             #     print("ABORT MSG")
             #     return -1000
 
-    def status_rcp(self):  # robot control program
-        # -1000 - connection error
-        # return:
-        # 'mode': 'REPEAT'/'TEACH'
-        # 'program_status': 'Program running'/'Program is not running'
-        # 'program_name': 'pg_name'/None
-
+    def status_rcp(self):
         self.robot_is_busy = True
 
-        if self.connection_mode == 'single':
-            if self.connect() == -1:
-                print("Can't establish connection with robot")
-                return -1000
-
-        # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
-
-        # RCP STATUS
         self.server.sendall(b'STATUS')
-        self.server.sendall(b'\x0a')
+        self.server.sendall(footer_message)
 
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            # print("STATUS", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
-            if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-                receive_string = self.server.recv(4096)
-                result_msg = receive_string.decode("utf-8", 'ignore')
-                break
-
-            if error_counter > error_counter_limit:
-                print("STATUS CTE")
-                self.add_to_log("STATUS CTE")
-                self.abort_connection()
-                self.robot_is_busy = False
-                return -1000
-
-            if self.abort_operation:
-                self.abort_connection()
-                return -1000
+        result_msg = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
 
         status = {}
         response_list = result_msg.split('\r\n')
@@ -891,46 +833,68 @@ class khirolib():
 
         if response_list[-2].find('No program is running.') >= 0:
             status.update({"program_name": None})
+            status.update({"step_num": None})
         else:
             status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
+            status.update({"step_num": response_list[-2].split()[2]})
+
+        self.robot_is_busy = False
 
         return status
+
+    def robot_state(self):
+        state = {}
+
+        self.server.sendall(b'SWITCH POWER')
+        self.server.sendall(footer_message)
+        switch_power_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        state.update({"motor_power": switch_power_str.split()[-2]})
+
+        self.server.sendall(b'SWITCH CS')
+        self.server.sendall(footer_message)
+        cs_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        state.update({"cycle_start": cs_str.split()[-2]})
+
+        self.server.sendall(b'SWITCH RGSO')
+        self.server.sendall(footer_message)
+        rgso_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        state.update({"rgso": cs_str.split()[-2]})
+
+        self.server.sendall(b'SWITCH ERROR')
+        self.server.sendall(footer_message)
+        error_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        if error_str.split()[-2] == "ON":
+            self.server.sendall(b'type $ERROR(ERROR)')
+            self.server.sendall(footer_message)
+            error_text_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+            state.update({"error": ' '.join(error_text_str.split('\r\n')[1:-1])})
+        else:
+            state.update({"error": "-"})
+
+
+
+        self.server.sendall(b'SWITCH REPEAT')
+        self.server.sendall(footer_message)
+        repeat_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        state.update({"repeat": repeat_str.split()[-2]})
+
+        self.server.sendall(b'SWITCH RUN')
+        self.server.sendall(footer_message)
+        run_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        state.update({"run": repeat_str.split()[-2]})
+
+        return state
 
     def abort_rcp(self, standalone=True):
         if standalone:
             self.robot_is_busy = True
-            if self.connection_mode == 'single':
-                if self.connect() < 0:
-                    print("Can't establish connection with robot")
-                    return -1000
-
-            if self._handshake() < 0:
-                return -1000
 
         self.server.sendall("ABORT".encode())
         self.server.sendall(footer_message)
 
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'ABORT' + b'\x0d\x0a\x3e') >= 0:
-                receive_string = self.server.recv(4096)
-                self.add_to_log(
-                    "ABORT " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                break
-
-            if error_counter > error_counter_limit:
-                self.add_to_log("ABORT CTE")
-                self.abort_connection()
-                return -1000
-
-            if self.abort_operation:
-                self.abort_connection()
-                return -1000
+        kawasaki_msg = self.wait_recv([b'ABORT' + b'\x0d\x0a\x3e'], timeout=1)
 
         if standalone:
-            self.close_connection()
             self.robot_is_busy = False
 
         return 1
@@ -938,57 +902,17 @@ class khirolib():
     def kill_rcp(self, standalone=True):
         if standalone:
             self.robot_is_busy = True
-            if self.connection_mode == 'single':
-                if self.connect() < 0:
-                    print("Can't establish connection with robot")
-                    return -1000
-
-            if self._handshake() < 0:
-                return -1000
 
         self.server.sendall("KILL".encode())
         self.server.sendall(footer_message)
 
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-            if receive_string.find(b'\x3a\x30\x29\x20') >= 0:  # END (Yes:1, No:0)
-                receive_string = self.server.recv(4096)
-                self.add_to_log("KILL " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
-                break
+        kawasaki_msg = self.wait_recv([b'\x3a\x30\x29\x20'], timeout=1)  # END (Yes:1, No:0)
 
-            if error_counter > error_counter_limit:
-                self.add_to_log("KILL CTE 1")
-                self.abort_connection()
-                return -1000
+        self.server.sendall(b'\x31\x0a')  # Delete program and abort
 
-            if self.abort_operation:
-                self.abort_connection()
-                return -1000
-
-        tmp = bytes.fromhex('31 0a')  # Delete program and abort
-        self.server.sendall(tmp)
-
-        error_counter = 0
-        while True:
-            error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
-
-            if receive_string.find(b'\x31\x0d\x0a\x3e') >= 0:
-                break
-
-            if error_counter > error_counter_limit:
-                self.add_to_log("KILL CTE 2")
-                self.abort_connection()
-                return -1000
-
-            if self.abort_operation:
-                self.abort_connection()
-                return -1000
+        kawasaki_msg = self.wait_recv([b'\x31\x0d\x0a\x3e'], timeout=1)
 
         if standalone:
-            self.close_connection()
             self.robot_is_busy = False
 
         return 1
@@ -1027,6 +951,19 @@ class khirolib():
 
         real_variable = float(tmp_string.split()[-2])
         return real_variable
+
+    def read_programs_list(self):
+        self.server.sendall("DIRECTORY/P".encode())
+        self.server.sendall(footer_message)
+
+        kawasaki_msg = self.wait_recv([b'\x3e'], timeout=1)
+        kawasaki_msg = kawasaki_msg.decode("utf-8", 'ignore')
+
+        response_strings = kawasaki_msg.split('\r\n')
+        if len(response_strings) > 3:
+            pg_list_str = response_strings[2]
+            pg_list = [item.strip() for item in pg_list_str.split() if item.strip() != ""]
+            return pg_list
 
     def _handshake(self):
         # 1 - without errors
