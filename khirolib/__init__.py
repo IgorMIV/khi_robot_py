@@ -2,8 +2,7 @@ import socket
 import select
 import time
 import math
-
-from PyQt6.QtCore import QTimer
+import threading
 
 error_counter_limit = 1000000
 footer_message = bytes.fromhex('0a')
@@ -21,7 +20,7 @@ class bcolors:
 
 
 class khirolib():
-    def __init__(self, ip, port, connection_mode='single', log=False):
+    def __init__(self, ip, port, log=False):
         self.ip_address = ip
         self.port_number = port
         self.logging = log
@@ -40,10 +39,8 @@ class khirolib():
         if self.connect() != 1:
             print("Can't establish connection with robot")
         else:
-            self.timer = QTimer()
-            self.timer.setInterval(100)
-            self.timer.timeout.connect(self.timer_timeout)
-            self.timer.start()
+            timer = threading.Timer(0.1, self.timer_timeout)
+            timer.start()
             self._connectionEstablished = True
 
     def timer_timeout(self):
@@ -70,7 +67,9 @@ class khirolib():
                     print('Receive error')
 
                 # self.parent.print_text(recv.decode("utf-8", 'ignore'))
-                print(recv.decode("utf-8", 'ignore'))
+                # print(recv.decode("utf-8", 'ignore'))
+
+        threading.Timer(0.1, self.timer_timeout).start()
 
     def connect(self):
         #     #  Return:
