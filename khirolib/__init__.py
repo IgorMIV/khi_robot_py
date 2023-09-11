@@ -39,8 +39,8 @@ class khirolib():
         if self.connect() != 1:
             print("Can't establish connection with robot")
         else:
-            timer = threading.Timer(0.1, self.timer_timeout)
-            timer.start()
+            self.timer = threading.Timer(0.1, self.timer_timeout)
+            self.timer.start()
             self._connectionEstablished = True
 
     def timer_timeout(self):
@@ -69,7 +69,8 @@ class khirolib():
                 # self.parent.print_text(recv.decode("utf-8", 'ignore'))
                 # print(recv.decode("utf-8", 'ignore'))
 
-        threading.Timer(0.1, self.timer_timeout).start()
+        self.timer = threading.Timer(0.1, self.timer_timeout)
+        self.timer.start()
 
     def connect(self):
         #     #  Return:
@@ -132,7 +133,7 @@ class khirolib():
 
     def disconnect(self):
         if self.server is not None:
-            self.timer.stop()
+            self.timer.cancel()
             self.close_connection()
             self._connectionEstablished = False
 
