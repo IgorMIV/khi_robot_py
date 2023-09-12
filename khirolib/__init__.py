@@ -6,6 +6,7 @@ import threading
 
 error_counter_limit = 1000000
 footer_message = bytes.fromhex('0a')
+timer_period = 0.1
 
 
 class bcolors:
@@ -29,6 +30,7 @@ class khirolib():
         self._connectionEstablished = False
 
         self.command_buffer = None
+        self.input_buffer = b''
 
         if self.logging:
             self.logfile = open("log.txt", "w")
@@ -39,7 +41,7 @@ class khirolib():
         if self.connect() != 1:
             print("Can't establish connection with robot")
         else:
-            self.timer = threading.Timer(0.1, self.timer_timeout)
+            self.timer = threading.Timer(timer_period, self.timer_timeout)
             self.timer.start()
             self._connectionEstablished = True
 
@@ -48,29 +50,21 @@ class khirolib():
             if self.command_buffer == '':
                 self.server.sendall(footer_message)
             else:
-                self.server.sendall(self.command_buffer.encode())
+                self.server.sendall(self.command_buffer)
                 self.server.sendall(footer_message)
 
             self.command_buffer = None
 
-        try:
-            ready_to_read, ready_to_write, in_error = select.select([self.server, ], [], [], 0.01)
-        except select.error:
-            print('Transmission error')
-        else:
-            if len(in_error) > 0:
-                return -1
-            if len(ready_to_read) > 0:
-                try:
-                    recv = self.server.recv(4096)
-                except:
-                    print('Receive error')
+        self.input_buffer += self.read_input_buffer()
 
-                # self.parent.print_text(recv.decode("utf-8", 'ignore'))
-                # print(recv.decode("utf-8", 'ignore'))
-
-        self.timer = threading.Timer(0.1, self.timer_timeout)
+        self.timer = threading.Timer(timer_period, self.timer_timeout)
         self.timer.start()
+
+    def add_cmd_to_buffer(self, cmd):
+        if self.command_buffer is not None:
+            self.command_buffer += cmd
+        else:
+            self.command_buffer = cmd
 
     def connect(self):
         #     #  Return:
@@ -92,7 +86,37 @@ class khirolib():
         return 1
 
     def send_command(self, command):
-        self.command_buffer = command
+        self.add_cmd_to_buffer(command.encode())
+        self.add_cmd_to_buffer(footer_message)
+        # self.command_buffer = command
+
+    def read_input_buffer(self):
+        timeout = 0.01
+        MAX_BYTES_TO_READ = 1024
+        incoming = b''
+        try:
+            ready_to_read, ready_to_write, in_error = select.select([self.server, ], [], [], timeout)
+        except select.error:
+            print('Transmission error')
+            return None
+        else:
+            if len(in_error) > 0:
+                print('Transmission error')
+                return None
+            if len(ready_to_read) > 0:
+                try:
+                    incoming = self.server.recv(MAX_BYTES_TO_READ)
+                except:
+                    print('Transmission error')
+        return incoming
+
+    def read_recv(self, ends_list):
+        for eom in ends_list:
+            eom_pos = self.input_buffer.find(eom)
+            if eom_pos > -1:  # Wait eom message from robot
+                res_string = self.input_buffer[:eom_pos+len(eom)]
+                self.input_buffer = self.input_buffer[eom_pos+len(eom):]
+                return res_string
 
     def wait_recv(self, ends_list, timeout=0.01):
         break_actual = False
@@ -119,6 +143,8 @@ class khirolib():
                         if recv == b'':
                             break
                         incoming += recv
+                        # print("INC", incoming)
+                        # print("INC", incoming.hex())
                         for eom in ends_list:
                             if incoming.find(eom) > -1:     # Wait eom message from robot
                                 break_actual = True
@@ -816,70 +842,79 @@ class khirolib():
     def status_rcp(self):
         self.robot_is_busy = True
 
-        self.server.sendall(b'STATUS')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'STATUS')
+        self.add_cmd_to_buffer(footer_message)
 
-        result_msg = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        result_msg = self.read_recv([b'\x0d\x0a\x3e'])
+        if result_msg is not None:
+            if len(result_msg) > 10:
+                result_msg = result_msg.decode("utf-8", 'ignore')
 
-        status = {}
-        response_list = result_msg.split('\r\n')
+            # # self.server.sendall(b'STATUS')
+            # # self.server.sendall(footer_message)
+            #
+                # result_msg = self.wait_recv([b'\x0a\x3e'], timeout=1).decode("utf-8", 'ignore')
+                status = {}
+                response_list = result_msg.split('\r\n')
 
-        for response_line in response_list:
-            if response_line.find(' mode') >= 0:
-                status.update({"mode": response_line.split(' ')[0]})
+                for response_line in response_list:
+                    if response_line.find(' mode') >= 0:
+                        status.update({"mode": response_line.split(' ')[0]})
 
-            if response_line.find('Stepper status:') >= 0:
-                status.update({"program_status": ' '.join(response_line.split(' ')[2:]).strip()[:-1]})
+                    if response_line.find('Stepper status:') >= 0:
+                        status.update({"program_status": ' '.join(response_line.split(' ')[2:]).strip()[:-1]})
 
-        if response_list[-2].find('No program is running.') >= 0:
-            status.update({"program_name": None})
-            status.update({"step_num": None})
-        else:
-            status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
-            status.update({"step_num": response_list[-2].split()[2]})
+                # print("AAA", response_list[-2].find('No program is running.'), result_msg)
+                if response_list[-2].find('No program is running.') >= 0:
+                    status.update({"program_name": None})
+                    status.update({"step_num": None})
+                # else:
+                #     status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
+                #     status.update({"step_num": response_list[-2].split()[2]})
 
-        self.robot_is_busy = False
+                self.robot_is_busy = False
+                # print(status)
 
-        return status
+                print(status)
+                return status
 
     def robot_state(self):
         state = {}
 
-        self.server.sendall(b'SWITCH POWER')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'SWITCH POWER')
+        self.add_cmd_to_buffer(footer_message)
         switch_power_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        print("WR", switch_power_str)
         state.update({"motor_power": switch_power_str.split()[-2]})
 
-        self.server.sendall(b'SWITCH CS')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'SWITCH CS')
+        self.add_cmd_to_buffer(footer_message)
         cs_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
         state.update({"cycle_start": cs_str.split()[-2]})
 
-        self.server.sendall(b'SWITCH RGSO')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'SWITCH RGSO')
+        self.add_cmd_to_buffer(footer_message)
         rgso_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
         state.update({"rgso": cs_str.split()[-2]})
 
-        self.server.sendall(b'SWITCH ERROR')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'SWITCH ERROR')
+        self.add_cmd_to_buffer(footer_message)
         error_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
         if error_str.split()[-2] == "ON":
-            self.server.sendall(b'type $ERROR(ERROR)')
-            self.server.sendall(footer_message)
+            self.add_cmd_to_buffer(b'type $ERROR(ERROR)')
+            self.add_cmd_to_buffer(footer_message)
             error_text_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
             state.update({"error": ' '.join(error_text_str.split('\r\n')[1:-1])})
         else:
             state.update({"error": "-"})
 
-
-
-        self.server.sendall(b'SWITCH REPEAT')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'SWITCH REPEAT')
+        self.add_cmd_to_buffer(footer_message)
         repeat_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
         state.update({"repeat": repeat_str.split()[-2]})
 
-        self.server.sendall(b'SWITCH RUN')
-        self.server.sendall(footer_message)
+        self.add_cmd_to_buffer(b'SWITCH RUN')
+        self.add_cmd_to_buffer(footer_message)
         run_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
         state.update({"run": repeat_str.split()[-2]})
 
