@@ -25,8 +25,8 @@ class khirolib():
         self.ip_address = ip
         self.port_number = port
         self.logging = log
-        self.server = None
 
+        self.server = None
         self._connectionEstablished = False
 
         self.command_buffer = None
@@ -47,12 +47,7 @@ class khirolib():
 
     def timer_timeout(self):
         if self.command_buffer is not None:
-            if self.command_buffer == '':
-                self.server.sendall(footer_message)
-            else:
-                self.server.sendall(self.command_buffer)
-                self.server.sendall(footer_message)
-
+            self.server.sendall(self.command_buffer)
             self.command_buffer = None
 
         self.input_buffer += self.read_input_buffer()
@@ -63,8 +58,9 @@ class khirolib():
     def add_cmd_to_buffer(self, cmd):
         if self.command_buffer is not None:
             self.command_buffer += cmd
+            self.command_buffer += footer_message
         else:
-            self.command_buffer = cmd
+            self.command_buffer = cmd + footer_message
 
     def connect(self):
         #     #  Return:
@@ -110,13 +106,14 @@ class khirolib():
                     print('Transmission error')
         return incoming
 
-    def read_recv(self, ends_list):
-        for eom in ends_list:
-            eom_pos = self.input_buffer.find(eom)
-            if eom_pos > -1:  # Wait eom message from robot
-                res_string = self.input_buffer[:eom_pos+len(eom)]
-                self.input_buffer = self.input_buffer[eom_pos+len(eom):]
-                return res_string
+    def blocking_recv(self, ends_list):
+        while True:
+            for eom in ends_list:
+                eom_pos = self.input_buffer.find(eom)
+                if eom_pos > -1:  # Wait eom message from robot
+                    res_string = self.input_buffer[:eom_pos+len(eom)]
+                    self.input_buffer = self.input_buffer[eom_pos+len(eom):]
+                    return res_string
 
     def wait_recv(self, ends_list, timeout=0.01):
         break_actual = False
@@ -840,21 +837,16 @@ class khirolib():
             #     return -1000
 
     def status_rcp(self):
+        status = {}
+
         self.robot_is_busy = True
 
         self.add_cmd_to_buffer(b'STATUS')
-        self.add_cmd_to_buffer(footer_message)
+        result_msg = self.blocking_recv([b'\x0d\x0a\x3e'])
 
-        result_msg = self.read_recv([b'\x0d\x0a\x3e'])
         if result_msg is not None:
             if len(result_msg) > 10:
                 result_msg = result_msg.decode("utf-8", 'ignore')
-
-            # # self.server.sendall(b'STATUS')
-            # # self.server.sendall(footer_message)
-            #
-                # result_msg = self.wait_recv([b'\x0a\x3e'], timeout=1).decode("utf-8", 'ignore')
-                status = {}
                 response_list = result_msg.split('\r\n')
 
                 for response_line in response_list:
@@ -864,59 +856,51 @@ class khirolib():
                     if response_line.find('Stepper status:') >= 0:
                         status.update({"program_status": ' '.join(response_line.split(' ')[2:]).strip()[:-1]})
 
-                # print("AAA", response_list[-2].find('No program is running.'), result_msg)
                 if response_list[-2].find('No program is running.') >= 0:
                     status.update({"program_name": None})
                     status.update({"step_num": None})
-                # else:
-                #     status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
-                #     status.update({"step_num": response_list[-2].split()[2]})
+                else:
+                    status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
+                    status.update({"step_num": response_list[-2].split()[2]})
 
                 self.robot_is_busy = False
-                # print(status)
 
                 print(status)
                 return status
+
+        self.robot_is_busy = False
 
     def robot_state(self):
         state = {}
 
         self.add_cmd_to_buffer(b'SWITCH POWER')
-        self.add_cmd_to_buffer(footer_message)
-        switch_power_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
-        print("WR", switch_power_str)
-        state.update({"motor_power": switch_power_str.split()[-2]})
+        switch_power_str = self.blocking_recv([b'\x3e'])
+        state.update({"motor_power": str(switch_power_str.split()[-2])})
 
         self.add_cmd_to_buffer(b'SWITCH CS')
-        self.add_cmd_to_buffer(footer_message)
-        cs_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
-        state.update({"cycle_start": cs_str.split()[-2]})
+        cs_str = self.blocking_recv([b'\x3e'])
+        state.update({"cycle_start": str(cs_str.split()[-2])})
 
         self.add_cmd_to_buffer(b'SWITCH RGSO')
-        self.add_cmd_to_buffer(footer_message)
-        rgso_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
-        state.update({"rgso": cs_str.split()[-2]})
+        rgso_str = self.blocking_recv([b'\x3e'])
+        state.update({"rgso": rgso_str.split()[-2]})
 
         self.add_cmd_to_buffer(b'SWITCH ERROR')
-        self.add_cmd_to_buffer(footer_message)
-        error_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        error_str = self.blocking_recv([b'\x3e'])
         if error_str.split()[-2] == "ON":
             self.add_cmd_to_buffer(b'type $ERROR(ERROR)')
-            self.add_cmd_to_buffer(footer_message)
-            error_text_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+            error_text_str = self.blocking_recv([b'\x3e'])
             state.update({"error": ' '.join(error_text_str.split('\r\n')[1:-1])})
         else:
             state.update({"error": "-"})
 
         self.add_cmd_to_buffer(b'SWITCH REPEAT')
-        self.add_cmd_to_buffer(footer_message)
-        repeat_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
+        repeat_str = self.blocking_recv([b'\x3e'])
         state.update({"repeat": repeat_str.split()[-2]})
 
         self.add_cmd_to_buffer(b'SWITCH RUN')
-        self.add_cmd_to_buffer(footer_message)
-        run_str = self.wait_recv([b'\x3e'], timeout=1).decode("utf-8", 'ignore')
-        state.update({"run": repeat_str.split()[-2]})
+        run_str = self.blocking_recv([b'\x3e'])
+        state.update({"run": run_str.split()[-2]})
 
         return state
 
