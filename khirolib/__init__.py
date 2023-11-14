@@ -36,7 +36,7 @@ class khirolib:
         self.port_number = port
         self.logging = log
 
-        self.server = None
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._connectionEstablished = False
 
         self.command_buffer = None
@@ -77,7 +77,6 @@ class khirolib:
         #     # 1 - without errors
         #     # -1000 - communication with robot was aborted
 
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.connect((self.ip_address, self.port_number))
 
         self.wait_recv([b'login:'], timeout=1)
@@ -128,11 +127,7 @@ class khirolib:
         incoming = b''
         not_found = True
         while not_found:
-            try:
-                recv = self.server.recv(1)
-            except socket.timeout:
-                print('Transmission error')
-                break
+            recv = self.server.recv(1024)
             if recv == b'':
                 break
             incoming += recv
@@ -187,6 +182,8 @@ class khirolib:
 
         # Read file data and split to package
         # one package limit is 2918 byte (in KIDE)
+        batch_size = 1500
+
         if filename is not None:
             f = open(filename, "r")
             first_line = f.readline()
@@ -198,10 +195,10 @@ class khirolib:
             file_string += '.END' + '\n'
 
         file = bytes(file_string, 'utf-8') + b'\x0d\x0a'
-        num_packages = math.ceil(len(file) / 2910)
+        num_packages = math.ceil(len(file) / batch_size)
         file_packages = []
         for i in range(num_packages):
-            pckg = b'\x02\x43\x20\x20\x20\x20\x30' + file[i * 2910:(i + 1) * 2910] + b'\x17'
+            pckg = b'\x02\x43\x20\x20\x20\x20\x30' + file[i * batch_size:(i + 1) * batch_size] + b'\x17'
             file_packages.append(pckg)
 
         status_rcp = self.status_rcp()
@@ -211,18 +208,6 @@ class khirolib:
                     return -1
             if self.kill_rcp(standalone=False) < 0:
                 return -1
-
-        # status_pc_list = self.status_pc()
-        # for i in range(len(status_pc_list)):
-        #     status_pc = status_pc_list[i]
-        #     if status_pc['program_name'] == program_name:
-        #         if status_pc['pc_status'] == 'Program running':
-        #             if self.abort_pc(threads=i+1)[i] is None:
-        #                 print("Abort failure")
-        #                 return -1
-        #         self.kill_pc(threads=i+1)
-        #         # if self.kill_pc(program_name=program_name) < 0:
-        #         #     return -1
 
         self.robot_is_busy = True
 
@@ -242,27 +227,44 @@ class khirolib:
             return -1
 
         # File transmission
-        error_not_found = True
-        for byte_package in file_packages:
-            if error_not_found:
-                self.server.sendall(byte_package)
+        error_found = False
+        resend_tries = 0
 
-                while True:
+        for byte_package, package_num in zip(file_packages, range(len(file_packages))):
+            self.server.sendall(byte_package)
+            print("sending ", package_num, "/", num_packages)
+            while True:
+                try:
                     kawasaki_msg = self.wait_recv([b'\x72\x74\x29',                     # End of 'abort'
                                                    b'\x05\x02\x45\x17',                 # abort transmission
                                                    b'\x05\x02\x43\x17'], timeout=1)     # package receive
-
-                    if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
-                        self.add_to_log("Error in program found")
-                        self.server.sendall(b'\x31\x0a')  # 31 - discard program and delete
+                except socket.timeout:
+                    if resend_tries <= 10:
+                        resend_tries += 1
+                        print("Timeout error ", resend_tries, "/10 trying resending...")
+                        self.server.sendall(byte_package)
                         continue
-
-                    if kawasaki_msg.find(b'\x05\x02\x45\x17') >= 0:
-                        error_not_found = False
+                    else:
+                        print("Something's wrong")
+                        self.add_to_log("Error sending program batch")
+                        self.server.sendall(b'\x31\x0a')
+                        error_found = True
                         break
 
-                    if kawasaki_msg.find(b'\x05\x02\x43\x17') >= 0:
-                        break
+                if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
+                    self.add_to_log("Error in program found")
+                    self.server.sendall(b'\x31\x0a')  # 31 - discard program and delete
+                    continue
+
+                if kawasaki_msg.find(b'\x05\x02\x45\x17') >= 0:
+                    error_found = True
+                    break
+
+                if kawasaki_msg.find(b'\x05\x02\x43\x17') >= 0:
+                    break
+
+            if error_found:
+                break
 
         tmp = bytes.fromhex('02 43 20 20 20 20 30 1a 17')  # 9
         self.server.sendall(tmp)
@@ -282,25 +284,24 @@ class khirolib:
                 continue
 
             if kawasaki_msg.find(b'\x73\x29\x0d\x0a\x3e') >= 0:
-                self.add_to_log("File load completed. (n errors)")
                 break
 
-        split_message = input_buffer.decode("utf-8", 'ignore').split(" ")
-
-        num_errors = 0
-        if len(split_message) > 2:
-            num_errors = int(split_message[-2][1:])
-
-        if num_errors == 0:
-            print("File transmission complete")
-            self.robot_is_busy = False
-            return None
-        else:
-            print(f"{BColors.FAIL}File transmission not complete - Errors found{BColors.ENDC}")
-            print("Errors list:")
-            print(input_buffer.decode("utf-8", 'ignore'))
-            print("Num errors:", num_errors)
-            print("-----------------")
+        # split_message = input_buffer.decode("utf-8", 'ignore').split(" ")
+        #
+        # num_errors = 0
+        # if len(split_message) > 2:
+        #     num_errors = int(split_message[-2][-1:])
+        # self.add_to_log("File load completed. ({0} errors)".format(num_errors))
+        # if num_errors == 0:
+        #     print("File transmission complete")
+        #     self.robot_is_busy = False
+        #     return None
+        # else:
+        #     print(f"{BColors.FAIL}File transmission not complete - Errors found{BColors.ENDC}")
+        #     print("Errors list:")
+        #     print(input_buffer.decode("utf-8", 'ignore'))
+        #     print("Num errors:", num_errors)
+        #     print("-----------------")
 
         self.robot_is_busy = False
 
