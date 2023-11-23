@@ -4,6 +4,7 @@ A module for a TelnetClient class that facilitates low-level interaction with a 
 Constants:
     MAX_BYTES_TO_READ (int): Maximum bytes to read in each receive operation.
     RECV_TIMEOUT (int): Receive timeout value in seconds.
+    SERVER_TIMEOUT (int): Time limit for connecting to robot
 """
 
 import socket
@@ -11,13 +12,16 @@ from robot_exception import *
 
 MAX_BYTES_TO_READ = 1024
 RECV_TIMEOUT = 1
+SERVER_TIMEOUT = 10
 
 
 class TelnetClient:
     def __init__(self, ip: str, port: int):
-        self._robot_ip = self._validate_ip(ip)  # The validated IP address of the robot.
-        self._robot_port = self._validate_port(port)  # The validated port number of the robot.
+        self._robot_ip = self._validate_ip(ip)                            # The validated IP address of the robot.
+        self._robot_port = self._validate_port(port)                      # The validated port number of the robot.
+
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # Socket object for the Telnet connection.
+        self._server.settimeout(SERVER_TIMEOUT)                           # Set time limit for connecting to robot
 
         if not self._connect():
             raise RobotConnException
@@ -26,10 +30,10 @@ class TelnetClient:
         try:
             self._server.connect((self._robot_ip, self._robot_port))
             self.wait_recv(b'login:')
-            self._server.sendall(b'as')
-            self._server.sendall(b'\x0d\x0a')
-            self.wait_recv(b'\x3e')  # wait for '>' symbol of a kawasaki terminal new line
-        except ConnectionError:
+            self._server.sendall(b'as')                  # Send 'as' as login for kawasaki telnet terminal
+            self._server.sendall(b'\x0d\x0a')            # Confirm with carriage return and line feed control symbols
+            self.wait_recv(b'\x3e')                      # wait for '>' symbol of a kawasaki terminal new line
+        except (TimeoutError, ConnectionRefusedError):
             return False
         return True
 
@@ -45,7 +49,7 @@ class TelnetClient:
                 break
             incoming += recv
             for eom in ends:
-                if incoming.find(eom) > -1:     # Wait eom message from robot
+                if incoming.find(eom) > -1:  # Wait eom message from robot
                     return incoming
 
     def disconnect(self):
@@ -75,8 +79,7 @@ class TelnetClient:
 
 
 if __name__ == "__main__":
-    robot = TelnetClient("127.0.0.1", 9105)
+    robot = TelnetClient("128.0.0.1", 9105)
     robot.send_cmd("list")
     print(robot.wait_recv(b'\x0d\x0a\x3e').decode("UTF-8"))
     robot.disconnect()
-
