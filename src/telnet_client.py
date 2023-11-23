@@ -28,7 +28,7 @@ class TelnetClient:
             self.wait_recv(b'login:')
             self._server.sendall(b'as')
             self._server.sendall(b'\x0d\x0a')
-            self.wait_recv(b'\x3e')
+            self.wait_recv(b'\x3e')  # wait for '>' symbol of a kawasaki terminal new line
         except ConnectionError:
             return False
         return True
@@ -53,10 +53,7 @@ class TelnetClient:
         self._server.close()
 
     def handshake(self):
-        """ Performs a handshake with the robot
-             1 - without errors
-            -1000 - connection errors and abort
-        """
+        """ Performs a handshake with the robot and raises an exception if something fails """
         self._server.sendall(b'\x0a')
         if not self.wait_recv(b"\x0d\x0a\x3e"):
             raise RobotConnException()
