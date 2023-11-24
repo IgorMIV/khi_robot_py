@@ -1,85 +1,101 @@
-import socket
 import time
+
+from telnet_client import TelnetClient
+from robot_exception import *
 import math
+import socket
 
 MAX_BYTES_TO_READ = 1024
 error_counter_limit = 1000000
-footer_message = bytes.fromhex('0a')
+
+
+FOOTER_MSG = b"\n"
+NEWLINE_MSG = b"\x0d\x0a\x3e"
 
 
 class KHITelnetLib:
     def __init__(self, ip, port):
-        self.ip_address = ip
-        self.port_number = port
+        self._ip_address = ip
+        self._port_number = port
 
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._client = TelnetClient(ip, port)
         self._connectionEstablished = False
 
         self.robot_is_busy = False
 
         if self.connect() != 1:
-            raise ConnectionError("Can't establish connection with robot")
-
-    def send_msg(self, cmd: bytes):
-        self.server.sendall(cmd)
-        self.server.sendall(footer_message)
+            raise RobotConnException()
 
     def connect(self):
-        #     #  Return:
-        #     # 1 - without errors
-        #     # -1000 - communication with robot was aborted
-
-        self.server.connect((self.ip_address, self.port_number))
-
-        self.wait_recv([b'login:'], timeout=1)
-        # self.parent.print_text(kawasaki_msg.decode("utf-8", 'ignore'))
-
-        self.server.sendall(b'as')
-        self.server.sendall(b'\x0d\x0a')
-
-        self.wait_recv([b'\x3e'], timeout=1)
-        # self.parent.print_text(kawasaki_msg.decode("utf-8", 'ignore'))
-
+        try:
+            self._client.wait_recv(b"login")                   # Send 'as' as login for kawasaki telnet terminal
+            self._client.send_msg("as", end=b"\x0d\x0a")  # Confirm with carriage return and line feed control symbols
+            self._client.wait_recv(NEWLINE_MSG)                # wait for '>' symbol of a kawasaki terminal new line
+        except (TimeoutError, ConnectionRefusedError):
+            return 0
         return 1
 
-    def wait_recv(self, ends_list, timeout=0.05):
-        incoming = b''
-        not_found = True
-        while not_found:
-            recv = self.server.recv(MAX_BYTES_TO_READ)
-            if recv == b'':
-                break
-            incoming += recv
-            # print("INC", incoming)
-            # print("INC", incoming.hex())
-            for eom in ends_list:
-                if incoming.find(eom) > -1:     # Wait eom message from robot
-                    not_found = False
-                    break
-        return incoming
+    def handshake(self):
+        """ Performs a handshake with the robot and raises an exception if something fails """
+        self._client.send_msg("")                               # Send empty command
+        if not self._client.wait_recv(NEWLINE_MSG):             # Wait for newline symbol
+            raise RobotConnException()
 
-    def is_connection_established(self):
-        return self._connectionEstablished
-
-    def disconnect(self):
-        if self.server is not None:
-            self.close_connection()
-            self._connectionEstablished = False
+    def ereset(self):
+        self._client.send_msg("ERESET")
+        self._client.wait_recv(NEWLINE_MSG)
 
     def close_connection(self):
         self.add_to_log("Close connection")
-        self.server.close()
+        self._client.disconnect()
 
-    def ereset(self):
-        # # 1 - everything is ok
-        # # -1000 - communication with robot was aborted
-        command = "ERESET"
-        self.server.sendall(command.encode())
-        self.server.sendall(footer_message)
+    def robot_state(self) -> dict:
+        """
+        Checks various internal state variables of a Kawasaki robot and returns them as a dictionary.
 
-        kawasaki_msg = self.wait_recv([b'\x3e'], timeout=1)
-        print(kawasaki_msg)
-        # self.parent.print_text(kawasaki_msg.decode("utf-8", 'ignore'))
+        Returns:
+            dict: A dictionary containing the following state variables:
+                - 'motor_power' (bool): Current state of the motor power (ON/OFF).
+                - 'cycle_start' (bool): State of the cycle start switch (ON/OFF).
+                - 'repeat' (bool): State of the repeat switch (ON/OFF).
+                - 'run' (bool): State of the run switch (ON/OFF).
+                - 'error' (str / None): If an error is detected, the description of the error; otherwise, None.
+
+        Raises:
+            ---
+
+        Note:
+            This function sends commands to a Kawasaki robot via a client connection (`self._client`)
+            to retrieve internal state variables and their descriptions, if available.
+            Variables to check might be added via state_vars, where first element of tuple is
+            a key in dictionary, and second - command that is sent to the robot
+        """
+        state = {}
+        state_vars = (("motor_power", "SWITCH POWER"),
+                      ("cycle_start", "SWITCH CS"),
+                      ("cycle_start", "SWITCH RGSO"),
+                      ("error", "SWITCH ERROR"),
+                      ("repeat", "SWITCH REPEAT"),
+                      ("run", "SWITCH RUN"))
+
+        for var, msg in state_vars:
+            self._client.send_msg(msg)
+            res = True if self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON" else False
+            if var != "error":
+                state.update({var: res})
+                continue
+
+            if res == "ON":
+                self._client.send_msg("type $ERROR(ERROR)")
+                error_descr = self._client.wait_recv(NEWLINE_MSG).decode()
+                state.update({var: ' '.join(error_descr.split('\r\n')[1:-1])})
+            else:
+                state.update({var: None})
+            continue
+        return state
+
+
+# ==========================================================================================
 
     def upload_program(self, program_name: str, program_string: str):
         #  None - everything is OK
@@ -109,14 +125,13 @@ class KHITelnetLib:
         self.robot_is_busy = True
 
         # Enable loading mode
-        self.server.sendall("LOAD using.rcc".encode())
-        self.server.sendall(footer_message)
+        self._client.send_msg("LOAD using.rcc")
 
         tmp = bytes.fromhex('02 41 20 20 20 20 30 17')
-        self.server.sendall(tmp)
+        self._client.sendall(tmp)
 
-        kawasaki_msg = self.wait_recv([b'Loading...(using.rcc)' + b'\x0d\x0a',         # package receive
-                                       b'\x65\x73\x73\x2e\x0d\x0a\x3e'], timeout=1)    # End of 'SAVE/LOAD in progress.'
+        kawasaki_msg = self._client.wait_recv(b'Loading...(using.rcc)' + b'\x0d\x0a',         # package receive
+                                                    b'\x65\x73\x73\x2e\x0d\x0a\x3e')  # End of 'SAVE/LOAD in progress.'
 
         if kawasaki_msg.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'
             self.add_to_log("SAVE/LOAD in progress.")
@@ -128,29 +143,29 @@ class KHITelnetLib:
         resend_tries = 0
 
         for byte_package, package_num in zip(file_packages, range(len(file_packages))):
-            self.server.sendall(byte_package)
+            self._client.send_bytes(byte_package)
             print("sending ", package_num, "/", num_packages)
             while True:
                 try:
-                    kawasaki_msg = self.wait_recv([b'\x72\x74\x29',                     # End of 'abort'
+                    kawasaki_msg = self._client.wait_recv([b'\x72\x74\x29',                     # End of 'abort'
                                                    b'\x05\x02\x45\x17',                 # abort transmission
-                                                   b'\x05\x02\x43\x17'], timeout=1)     # package receive
+                                                   b'\x05\x02\x43\x17'])     # package receive
                 except socket.timeout:
                     if resend_tries <= 10:
                         resend_tries += 1
                         print("Timeout error ", resend_tries, "/10 trying resending...")
-                        self.server.sendall(byte_package)
+                        self._client.send_bytes(byte_package)
                         continue
                     else:
                         print("Something's wrong")
                         self.add_to_log("Error sending program batch")
-                        self.server.sendall(b'\x31\x0a')
+                        self._client.send_bytes(b'\x31\x0a')
                         error_found = True
                         break
 
                 if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
                     self.add_to_log("Error in program found")
-                    self.server.sendall(b'\x31\x0a')  # 31 - discard program and delete
+                    self._client.sendall(b'\x31\x0a')  # 31 - discard program and delete
                     continue
 
                 if kawasaki_msg.find(b'\x05\x02\x45\x17') >= 0:
@@ -164,20 +179,20 @@ class KHITelnetLib:
                 break
 
         tmp = bytes.fromhex('02 43 20 20 20 20 30 1a 17')  # 9
-        self.server.sendall(tmp)
+        self._client.sendall(tmp)
 
         tmp = bytes.fromhex('02 45 20 20 20 20 30 17')  # Cancel loading mode
-        self.server.sendall(tmp)
+        self._client.sendall(tmp)
 
         input_buffer = b""
         while True:
-            kawasaki_msg = self.wait_recv([b'\x72\x74\x29',                         # End of 'abort'
-                                           b'\x73\x29\x0d\x0a\x3e'], timeout=1)     # End of 'errors'
+            kawasaki_msg = self._client.wait_recv(b'\x72\x74\x29',                         # End of 'abort'
+                                                  b'\x73\x29\x0d\x0a\x3e')     # End of 'errors'
             input_buffer += kawasaki_msg
 
             if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
                 self.add_to_log("Error in program found")
-                self.server.sendall(b'\x31\x0a')  # 31 - discard program and delete
+                self._client.sendall(b'\x31\x0a')  # 31 - discard program and delete
                 continue
 
             if kawasaki_msg.find(b'\x73\x29\x0d\x0a\x3e') >= 0:
@@ -205,15 +220,15 @@ class KHITelnetLib:
         return -1
 
     def delete_program(self, program_name):
-        self.server.sendall(("DELETE/P/D " + program_name).encode())
-        self.server.sendall(footer_message)
+        self._client.sendall(("DELETE/P/D " + program_name).encode())
+        self._client.sendall(FOOTER_MSG)
 
-        self.wait_recv([b'\x30\x29\x20'], timeout=1)     # Are you sure ? (Yes:1, No:0)?
+        self._client.wait_recv([b'\x30\x29\x20'])     # Are you sure ? (Yes:1, No:0)?
 
-        self.server.sendall(b'\x31')
-        self.server.sendall(footer_message)
+        self._client.sendall(b'\x31')
+        self._client.sendall(FOOTER_MSG)
 
-        self.wait_recv([b'\x31\x0d\x0a\x3e'], timeout=1)
+        self._client.wait_recv([b'\x31\x0d\x0a\x3e'])
 
     def status_pc(self, threads=None) -> [dict]:
         # -1000 - connection error
@@ -259,16 +274,16 @@ class KHITelnetLib:
 
         for thread in threads_num:
             # PCSTATUS
-            self.server.sendall(b'PCSTATUS ' + bytes(str(thread), 'utf-8') + b':')
-            self.server.sendall(b'\x0a')
+            self._client.sendall(b'PCSTATUS ' + bytes(str(thread), 'utf-8') + b':')
+            self._client.sendall(b'\x0a')
 
             error_counter = 0
             while True:
                 error_counter += 1
-                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                receive_string = self._client.recv(4096, socket.MSG_PEEK)
                 # print("PCSTATUS", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
                 if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-                    receive_string = self.server.recv(4096)
+                    receive_string = self._client.recv(4096)
                     result_msg = receive_string.decode("utf-8", 'ignore')
                     break
 
@@ -362,16 +377,16 @@ class KHITelnetLib:
 
         for thread in abort_num:
             # PCABORT
-            self.server.sendall(b'PCABORT ' + bytes(str(thread), "UTF-8") + b':')
-            self.server.sendall(b'\x0a')
+            self._client.sendall(b'PCABORT ' + bytes(str(thread), "UTF-8") + b':')
+            self._client.sendall(b'\x0a')
 
             error_counter = 0
             while True:
                 error_counter += 1
-                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                receive_string = self._client.recv(4096, socket.MSG_PEEK)
                 # print("RCV", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
                 if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-                    receive_string = self.server.recv(4096)
+                    receive_string = self._client.recv(4096)
                     result_msg = receive_string.decode("utf-8", 'ignore')
                     break
 
@@ -424,15 +439,15 @@ class KHITelnetLib:
             return -1000
 
         # EXECUTE program
-        self.server.sendall(b'PCEXECUTE ' + bytes(str(thread), 'utf-8') + b':' + program_name.encode())
-        self.server.sendall(b'\x0a')
+        self._client.sendall(b'PCEXECUTE ' + bytes(str(thread), 'utf-8') + b':' + program_name.encode())
+        self._client.sendall(b'\x0a')
 
         while True:
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            receive_string = self._client.recv(4096, socket.MSG_PEEK)
             # print(receive_string.decode("utf-8", 'ignore'), receive_string.hex())
             if receive_string.find(b'Program does not exist.') >= 0:
                 # This is AS monitor terminal.. Wait '>' sign from robot
-                receive_string = self.server.recv(4096)
+                receive_string = self._client.recv(4096)
                 self.add_to_log("Program does not exist " + receive_string.decode("utf-8", 'ignore') +
                                 ":" + receive_string.hex())
                 print("Program " + program_name + " does not exist")
@@ -441,7 +456,7 @@ class KHITelnetLib:
                 return -1
 
             if receive_string.find(b'\x0d\x0a\x3e') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
-                receive_string = self.server.recv(4096)
+                receive_string = self._client.recv(4096)
                 self.add_to_log("PC program run " + receive_string.decode("utf-8", 'ignore') +
                                 ":" + receive_string.hex())
                 print("PC " + program_name + " run")
@@ -509,27 +524,27 @@ class KHITelnetLib:
 
         for thread in kill_num:
             # PCKILL
-            self.server.sendall(b'PCKILL ' + bytes(str(thread), "UTF-8") + b':')
-            self.server.sendall(b'\x0a')
+            self._client.sendall(b'PCKILL ' + bytes(str(thread), "UTF-8") + b':')
+            self._client.sendall(b'\x0a')
 
             error_counter = 0
             result_msg = b""
 
             while True:
                 error_counter += 1
-                receive_string = self.server.recv(4096, socket.MSG_PEEK)
+                receive_string = self._client.recv(4096, socket.MSG_PEEK)
 
                 # print("RCV", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
 
                 if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-                    receive_string = self.server.recv(4096)
+                    receive_string = self._client.recv(4096)
                     result_msg = receive_string
                     break
 
                 if receive_string.find(b'\x30\x29\x20') >= 0:  # Are you sure ? (Yes:1, No:0)?
-                    self.server.recv(4096)
+                    self._client.recv(4096)
                     tmp = bytes.fromhex('31 0a')  # Delete program and abort
-                    self.server.sendall(tmp)
+                    self._client.sendall(tmp)
                     continue
 
                 if error_counter > error_counter_limit:
@@ -581,15 +596,15 @@ class KHITelnetLib:
             return -1000
 
         # ZPOW ON
-        self.server.sendall(b'ZPOW ON')
-        self.server.sendall(b'\x0a')
+        self._client.sendall(b'ZPOW ON')
+        self._client.sendall(b'\x0a')
 
         error_counter = 0
         while True:
             error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            receive_string = self._client.recv(4096, socket.MSG_PEEK)
             if receive_string.find(b'\x0d\x0a\x3e') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
-                receive_string = self.server.recv(4096)
+                receive_string = self._client.recv(4096)
                 self.add_to_log("ZPOW ON " + receive_string.decode("utf-8", 'ignore') + ":" + receive_string.hex())
                 break
             if error_counter > error_counter_limit:
@@ -599,15 +614,15 @@ class KHITelnetLib:
                 return -1000
 
         # EXECUTE program
-        self.server.sendall(b'EXECUTE ' + program_name.encode())
-        self.server.sendall(b'\x0a')
+        self._client.sendall(b'EXECUTE ' + program_name.encode())
+        self._client.sendall(b'\x0a')
 
         input_buffer = b''
         while True:
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            receive_string = self._client.recv(4096, socket.MSG_PEEK)
             # print(receive_string.decode("utf-8", 'ignore'), receive_string.hex())
             if receive_string.find(b'Program does not exist.') >= 0:
-                receive_string = self.server.recv(4096)
+                receive_string = self._client.recv(4096)
                 self.add_to_log("Program does not exist " + receive_string.decode("utf-8", 'ignore') +
                                 ":" + receive_string.hex())
                 print("Program " + program_name + " does not exist")
@@ -616,7 +631,7 @@ class KHITelnetLib:
                 return -1
 
             if receive_string.find(b'(P1002)Cannot execute program because teach lock is ON.') > -1:
-                receive_string = self.server.recv(4096)
+                receive_string = self._client.recv(4096)
                 self.add_to_log("Pendant in teach mode " + receive_string.decode("utf-8", 'ignore') +
                                 ":" + receive_string.hex())
                 print("Pendant in teach mode")
@@ -625,7 +640,7 @@ class KHITelnetLib:
                 return -1
 
             if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-                tmp_buffer = self.server.recv(4096)
+                tmp_buffer = self._client.recv(4096)
                 input_buffer += tmp_buffer
 
                 self.add_to_log("RCP program run " + receive_string.decode("utf-8", 'ignore') +
@@ -637,7 +652,7 @@ class KHITelnetLib:
                     return 1
 
             if (input_buffer + receive_string).find(b'Program completed.No = 1') > -1:
-                tmp_buffer = self.server.recv(4096)
+                tmp_buffer = self._client.recv(4096)
                 input_buffer += tmp_buffer
 
                 self.add_to_log("RCP program completed " + receive_string.decode("utf-8", 'ignore') +
@@ -653,7 +668,7 @@ class KHITelnetLib:
         self.robot_is_busy = True
 
         self.send_msg(b'STATUS')
-        result_msg = self.wait_recv([b'\x0d\x0a\x3e'])
+        result_msg = self._client.wait_recv([b'\x0d\x0a\x3e'])
 
         if result_msg is not None:
             if len(result_msg) > 10:
@@ -681,48 +696,14 @@ class KHITelnetLib:
 
         self.robot_is_busy = False
 
-    def robot_state(self) -> dict:
-        state = {}
-
-        self.send_msg(b'SWITCH POWER')
-        switch_power_str = self.wait_recv([b'\x3e'])
-        state.update({"motor_power": str(switch_power_str.split()[-2])})
-
-        self.send_msg(b'SWITCH CS')
-        cs_str = self.wait_recv([b'\x3e'])
-        state.update({"cycle_start": str(cs_str.split()[-2])})
-
-        self.send_msg(b'SWITCH RGSO')
-        rgso_str = self.wait_recv([b'\x3e'])
-        state.update({"rgso": rgso_str.split()[-2]})
-
-        self.send_msg(b'SWITCH ERROR')
-        error_str = self.wait_recv([b'\x3e'])
-        if error_str.split()[-2] == "ON":
-            self.send_msg(b'type $ERROR(ERROR)')
-            error_text_str = self.wait_recv([b'\x3e']).decode()
-            state.update({"error": ' '.join(error_text_str.split('\r\n')[1:-1])})
-        else:
-            state.update({"error": "-"})
-
-        self.send_msg(b'SWITCH REPEAT')
-        repeat_str = self.wait_recv([b'\x3e'])
-        state.update({"repeat": repeat_str.split()[-2]})
-
-        self.send_msg(b'SWITCH RUN')
-        run_str = self.wait_recv([b'\x3e'])
-        state.update({"run": run_str.split()[-2]})
-
-        return state
-
     def abort_rcp(self, standalone=True):
         if standalone:
             self.robot_is_busy = True
 
-        self.server.sendall("ABORT".encode())
-        self.server.sendall(footer_message)
+        self._client.sendall("ABORT".encode())
+        self._client.sendall(FOOTER_MSG)
 
-        self.wait_recv([b'ABORT' + b'\x0d\x0a\x3e'], timeout=1)
+        self._client.wait_recv([b'ABORT' + b'\x0d\x0a\x3e'])
 
         if standalone:
             self.robot_is_busy = False
@@ -733,14 +714,14 @@ class KHITelnetLib:
         if standalone:
             self.robot_is_busy = True
 
-        self.server.sendall("KILL".encode())
-        self.server.sendall(footer_message)
+        self._client.sendall("KILL".encode())
+        self._client.sendall(FOOTER_MSG)
 
-        self.wait_recv([b'\x3a\x30\x29\x20'], timeout=1)  # END (Yes:1, No:0)
+        self._client.wait_recv([b'\x3a\x30\x29\x20'])  # END (Yes:1, No:0)
 
-        self.server.sendall(b'\x31\x0a')  # Delete program and abort
+        self._client.sendall(b'\x31\x0a')  # Delete program and abort
 
-        self.wait_recv([b'\x31\x0d\x0a\x3e'], timeout=1)
+        self._client.wait_recv([b'\x31\x0d\x0a\x3e'])
 
         if standalone:
             self.robot_is_busy = False
@@ -753,15 +734,15 @@ class KHITelnetLib:
 
         self.robot_is_busy = True
 
-        self.server.sendall(b'list /r ' + bytes(str(variable_name), 'utf-8'))
-        self.server.sendall(b'\x0a')
+        self._client.sendall(b'list /r ' + bytes(str(variable_name), 'utf-8'))
+        self._client.sendall(b'\x0a')
 
         error_counter = 0
         while True:
             error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            receive_string = self._client.recv(4096, socket.MSG_PEEK)
             if receive_string.find(b'\x0d\x0a\x3e') > -1:
-                tmp_string = self.server.recv(4096)
+                tmp_string = self._client.recv(4096)
                 break
 
             if error_counter > error_counter_limit:
@@ -774,10 +755,10 @@ class KHITelnetLib:
         return real_variable
 
     def read_programs_list(self) -> [str]:
-        self.server.sendall("DIRECTORY/P".encode())
-        self.server.sendall(footer_message)
+        self._client.sendall("DIRECTORY/P".encode())
+        self._client.sendall(FOOTER_MSG)
 
-        kawasaki_msg = self.wait_recv([b'\x3e'], timeout=1)
+        kawasaki_msg = self._client.wait_recv([b'\x3e'])
         kawasaki_msg = kawasaki_msg.decode("utf-8", 'ignore')
 
         response_strings = kawasaki_msg.split('\r\n')
@@ -790,14 +771,14 @@ class KHITelnetLib:
         # 1 - without errors
         # -1000 - connection errors and abort
 
-        self.server.sendall(b'\x0a')
+        self._client.sendall(b'\x0a')
         error_counter = 0
         while True:
             error_counter += 1
-            receive_string = self.server.recv(4096, socket.MSG_PEEK)
+            receive_string = self._client.recv(4096, socket.MSG_PEEK)
 
             if receive_string.find(b'\x0d\x0a\x3e') > -1:
-                self.server.recv(4096)
+                self._client.recv(4096)
                 break
 
             if error_counter > error_counter_limit:
@@ -815,14 +796,6 @@ if __name__ == "__main__":
     IP = "127.0.0.1"    # IP for K-Roset
     PORT = 9105         # Port for K-Roset
 
-    with KHITelnetLib(IP, PORT, log=False) as robot:
-
-        program_text = ""
-        for i in range(10000):
-            program_text += "POINT loc1 = TRANS(0, 0, {0})\n".format(i)
-
-        for i in range(9):
-
-            result = robot.upload_program(program_name="prog{0}.as".format(i),
-                                          program_text=program_text)
-            print("sent program ", i)
+    robot = KHITelnetLib(IP, PORT)
+    print(robot.robot_state())
+    robot.close_connection()

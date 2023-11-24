@@ -8,7 +8,6 @@ Constants:
 """
 
 import socket
-from robot_exception import *
 
 MAX_BYTES_TO_READ = 1024
 RECV_TIMEOUT = 1
@@ -20,32 +19,22 @@ class TelnetClient:
         self._robot_ip = self._validate_ip(ip)                            # The validated IP address of the robot.
         self._robot_port = self._validate_port(port)                      # The validated port number of the robot.
 
-        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # Socket object for the Telnet connection.
-        self._server.settimeout(SERVER_TIMEOUT)                           # Set time limit for connecting to robot
+        self._client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # Socket object for the Telnet connection.
+        self._client.settimeout(SERVER_TIMEOUT)                           # Set time limit for connecting to robot
+        self._client.connect((self._robot_ip, self._robot_port))
 
-        if not self._connect():
-            raise RobotConnException
-
-    def _connect(self) -> bool:
-        try:
-            self._server.connect((self._robot_ip, self._robot_port))
-            self.wait_recv(b'login:')
-            self._server.sendall(b'as')                  # Send 'as' as login for kawasaki telnet terminal
-            self._server.sendall(b'\x0d\x0a')            # Confirm with carriage return and line feed control symbols
-            self.wait_recv(b'\x3e')                      # wait for '>' symbol of a kawasaki terminal new line
-        except (TimeoutError, ConnectionRefusedError):
-            return False
-        return True
-
-    def send_cmd(self, cmd: str):
+    def send_msg(self, cmd: str, end: bytes = b'\n'):
         """ sends a command to the robot """
-        self._server.sendall(cmd.encode() + b'\n')
+        self._client.sendall(cmd.encode() + end)
+
+    def send_bytes(self, cmd: bytes):
+        self._client.sendall(cmd)
 
     def wait_recv(self, *ends: b'') -> bytes:
         """ Waits to receive data from the robot until one of the specified end markers is encountered """
         incoming = b''
         while True:
-            if not (recv := self._server.recv(MAX_BYTES_TO_READ)):
+            if not (recv := self._client.recv(MAX_BYTES_TO_READ)):
                 break
             incoming += recv
             for eom in ends:
@@ -54,13 +43,7 @@ class TelnetClient:
 
     def disconnect(self):
         """ Closes socket without checks """
-        self._server.close()
-
-    def handshake(self):
-        """ Performs a handshake with the robot and raises an exception if something fails """
-        self._server.sendall(b'\x0a')
-        if not self.wait_recv(b"\x0d\x0a\x3e"):
-            raise RobotConnException()
+        self._client.close()
 
     @staticmethod
     def _validate_ip(ip) -> str:
@@ -79,7 +62,7 @@ class TelnetClient:
 
 
 if __name__ == "__main__":
-    robot = TelnetClient("128.0.0.1", 9105)
-    robot.send_cmd("list")
+    robot = TelnetClient("127.0.0.1", 9105)
+    robot.send_msg("list")
     print(robot.wait_recv(b'\x0d\x0a\x3e').decode("UTF-8"))
     robot.disconnect()
