@@ -32,10 +32,10 @@ class TelnetClient:
 
     def wait_recv(self, *ends: b'') -> bytes:
         """ Waits to receive data from the robot until one of the specified end markers is encountered """
-        incoming = b''
+        incoming = b""
         while True:
             if not (recv := self._client.recv(MAX_BYTES_TO_READ)):
-                break
+                return b""
             incoming += recv
             for eom in ends:
                 if incoming.find(eom) > -1:  # Wait eom message from robot

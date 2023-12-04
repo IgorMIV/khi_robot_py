@@ -1,13 +1,21 @@
+import socket
+import time
 from telnet_client import TelnetClient
 from robot_exception import *
 import math
 
 MAX_BYTES_TO_READ = 1024
+UPLOAD_BATCH_SIZE = 2500
 error_counter_limit = 1000000
 
 
-FOOTER_MSG = b"\n"
-NEWLINE_MSG = b"\x0d\x0a\x3e"
+FOOTER_MSG = b"\n"                              # "\n"
+NEWLINE_MSG = b"\x0d\x0a\x3e"                   # "\n\d>"
+CONFIRMATION_REQUEST = b'\x30\x29\x20'          # Are you sure ? (Yes:1, No:0)?
+SYNTAX_ERRORS = b"\x61\x62\x6f\x72\x74\x29"     # "abort)"
+TRANSMISSION_STATUS = b"\x73\x29\x0d\x0a\x3e"   # end of "errors)"
+HARD_ABORT = b"\x05\x02\x45\x17"                #
+PKG_RECV = b"\x05\x02\x43\x17"                  #
 
 
 class KHITelnetLib:
@@ -21,7 +29,7 @@ class KHITelnetLib:
         self.robot_is_busy = False
 
         if self.connect() != 1:
-            raise RobotConnException()
+            raise RobotConnError()
 
     def connect(self):
         try:
@@ -36,7 +44,7 @@ class KHITelnetLib:
         """ Performs a handshake with the robot and raises an exception if something fails """
         self._client.send_msg("")                         # Send empty command
         if not self._client.wait_recv(NEWLINE_MSG):       # Wait for newline symbol
-            raise RobotConnException()
+            raise RobotConnError()
 
     def ereset(self):
         self._client.send_msg("ERESET")
@@ -141,146 +149,51 @@ class KHITelnetLib:
                 status.update({"step_num": response_list[-2].split()[2]})
         return status
 
-    def upload_program(self, program_name: str, program_string: str):
-        #  None - everything is OK
-        # -1 - uploading error
-        # -2 - function arguments error
-        # -1000 - communication with robot was aborted
+    def upload_program(self, program_string: str, proceed_on_error: bool = True):
+        # one package size for splitting large programs.
+        # is 2918 bytes in KIDE and robot is responding for up to 3064 bytes
 
-        # Read file data and split to package
-        # one package limit is 2918 byte (in KIDE)
-        batch_size = 1500
-
-        file = bytes(program_string, 'utf-8') + b'\x0d\x0a'
-        num_packages = math.ceil(len(file) / batch_size)
+        program_bytes = bytes(program_string, 'utf-8') + NEWLINE_MSG
+        num_packages = math.ceil(len(program_bytes) / UPLOAD_BATCH_SIZE)
         file_packages = []
         for idx in range(num_packages):
-            pckg = b'\x02\x43\x20\x20\x20\x20\x30' + file[idx * batch_size:(idx + 1) * batch_size] + b'\x17'
-            file_packages.append(pckg)
+            pkg = (b'\x02\x43\x20\x20\x20\x20\x30'
+                   + program_bytes[idx * UPLOAD_BATCH_SIZE: (idx + 1) * UPLOAD_BATCH_SIZE] + b'\x17')
+            file_packages.append(pkg)
 
-        status_rcp = self.status_rcp()
-        if status_rcp['program_name'] == program_name:  # program active
-            if status_rcp['program_status'] == 'Program running':  # program not aborted
-                if self.abort_rcp(standalone=False) < 0:
-                    return -1
-            if self.kill_rcp(standalone=False) < 0:
-                return -1
+        self._client.send_msg("LOAD using.rcc")  # Enable loading mode
+        self._client.send_bytes(bytes.fromhex('02 41 20 20 20 20 30 17'))
 
-        self.robot_is_busy = True
+        if (b'\x65\x73\x73\x2e\x0d\x0a\x3e' in  # End of 'SAVE/LOAD in progress.'
+                self._client.wait_recv(b'Loading...(using.rcc)' + b'\x0d\x0a', b'\x65\x73\x73\x2e\x0d\x0a\x3e')):
+            raise RobotProgTransmissionError("SAVE/LOAD in progress")
 
-        # Enable loading mode
-        self._client.send_msg("LOAD using.rcc")
-
-        tmp = bytes.fromhex('02 41 20 20 20 20 30 17')
-        self._client.sendall(tmp)
-
-        kawasaki_msg = self._client.wait_recv(b'Loading...(using.rcc)' + b'\x0d\x0a',         # package receive
-                                              b'\x65\x73\x73\x2e\x0d\x0a\x3e')  # End of 'SAVE/LOAD in progress.'
-
-        if kawasaki_msg.find(b'\x65\x73\x73\x2e\x0d\x0a\x3e') >= 0:  # End of 'SAVE/LOAD in progress.'  ess.
-            self.add_to_log("SAVE/LOAD in progress.")
-            print("SAVE/LOAD in progress.")
-            return -1
-
-        # File transmission
-        error_found = False
-        resend_tries = 0
-
-        for byte_package, package_num in zip(file_packages, range(len(file_packages))):
+        errors = []
+        for byte_package in file_packages:
             self._client.send_bytes(byte_package)
-            print("sending ", package_num, "/", num_packages)
-            while True:
-                try:
-                    kawasaki_msg = self._client.wait_recv([b'\x72\x74\x29',                     # End of 'abort'
-                                                           b'\x05\x02\x45\x17',                 # abort transmission
-                                                           b'\x05\x02\x43\x17'])     # package receive
-                except TimeoutError:
-                    if resend_tries <= 10:
-                        resend_tries += 1
-                        print("Timeout error ", resend_tries, "/10 trying resending...")
-                        self._client.send_bytes(byte_package)
-                        continue
-                    else:
-                        print("Something's wrong")
-                        self.add_to_log("Error sending program batch")
-                        self._client.send_bytes(b'\x31\x0a')
-                        error_found = True
-                        break
-
-                if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
-                    self.add_to_log("Error in program found")
-                    self._client.sendall(b'\x31\x0a')  # 31 - discard program and delete
-                    continue
-
-                if kawasaki_msg.find(b'\x05\x02\x45\x17') >= 0:
-                    error_found = True
-                    break
-
-                if kawasaki_msg.find(b'\x05\x02\x43\x17') >= 0:
-                    break
-
-            if error_found:
+            kawasaki_msg = self._client.wait_recv(SYNTAX_ERRORS, HARD_ABORT, PKG_RECV)
+            if proceed_on_error and SYNTAX_ERRORS in kawasaki_msg:
+                while PKG_RECV not in kawasaki_msg:
+                    errors.append(kawasaki_msg)
+                    self._client.send_msg("0\n")  # confirm to comment line with error and proceed
+                    kawasaki_msg = self._client.wait_recv(PKG_RECV, SYNTAX_ERRORS)
+            elif not proceed_on_error and SYNTAX_ERRORS in kawasaki_msg:
+                self._client.send_msg("1\n")  # confirm to delete program and abort transmission
                 break
-
-        tmp = bytes.fromhex('02 43 20 20 20 20 30 1a 17')  # 9
-        self._client.sendall(tmp)
-
-        tmp = bytes.fromhex('02 45 20 20 20 20 30 17')  # Cancel loading mode
-        self._client.sendall(tmp)
-
-        input_buffer = b""
-        while True:
-            kawasaki_msg = self._client.wait_recv(b'\x72\x74\x29',                         # End of 'abort'
-                                                  b'\x73\x29\x0d\x0a\x3e')     # End of 'errors'
-            input_buffer += kawasaki_msg
-
-            if kawasaki_msg.find(b'\x72\x74\x29') >= 0:
-                self.add_to_log("Error in program found")
-                self._client.sendall(b'\x31\x0a')  # 31 - discard program and delete
-                continue
-
-            if kawasaki_msg.find(b'\x73\x29\x0d\x0a\x3e') >= 0:
+            elif HARD_ABORT in kawasaki_msg:
                 break
-
-        # split_message = input_buffer.decode("utf-8", 'ignore').split(" ")
-        #
-        # num_errors = 0
-        # if len(split_message) > 2:
-        #     num_errors = int(split_message[-2][-1:])
-        # self.add_to_log("File load completed. ({0} errors)".format(num_errors))
-        # if num_errors == 0:
-        #     print("File transmission complete")
-        #     self.robot_is_busy = False
-        #     return None
-        # else:
-        #     print(f"{BColors.FAIL}File transmission not complete - Errors found{BColors.ENDC}")
-        #     print("Errors list:")
-        #     print(input_buffer.decode("utf-8", 'ignore'))
-        #     print("Num errors:", num_errors)
-        #     print("-----------------")
-
-        self.robot_is_busy = False
-
-        return -1
-
-
-# ==========================================================================================
-
-
+        self._client.send_bytes(bytes.fromhex('02 43 20 20 20 20 30 1a 17'
+                                              '02 45 20 20 20 20 30 17'))  # Cancel loading mode
+        _ = self._client.wait_recv(SYNTAX_ERRORS, TRANSMISSION_STATUS)
+        if len(errors) > 0:
+            raise RobotProgSyntaxError(errors)
 
     def delete_program(self, program_name):
-        self._client.sendall(("DELETE/P/D " + program_name).encode())
-        self._client.sendall(FOOTER_MSG)
+        self._client.send_msg("DELETE/P/D " + program_name)
+        self._client.wait_recv(CONFIRMATION_REQUEST)
+        self._client.send_msg("1")
+        self._client.wait_recv(b"\x31\x0d\x0a\x3e")
 
-        self._client.wait_recv([b'\x30\x29\x20'])     # Are you sure ? (Yes:1, No:0)?
-
-        self._client.sendall(b'\x31')
-        self._client.sendall(FOOTER_MSG)
-
-        self._client.wait_recv([b'\x31\x0d\x0a\x3e'])
-
-
-    #
     # def abort_pc(self, *threads: int, program_name: str = "") -> [str]:
     #     # type(list) - [None, 'aborted', 'not_running', None, 'not_running']
     #     # None - if don't know about this process
@@ -632,40 +545,6 @@ class KHITelnetLib:
     #             self.robot_is_busy = False
     #             return 2
     #
-    # def status_rcp(self) -> dict:
-    #     status = {}
-    #
-    #     self.robot_is_busy = True
-    #
-    #     self.send_msg(b'STATUS')
-    #     result_msg = self._client.wait_recv([b'\x0d\x0a\x3e'])
-    #
-    #     if result_msg is not None:
-    #         if len(result_msg) > 10:
-    #             result_msg = result_msg.decode("utf-8", 'ignore')
-    #             response_list = result_msg.split('\r\n')
-    #
-    #             for response_line in response_list:
-    #                 if response_line.find(' mode') >= 0:
-    #                     status.update({"mode": response_line.split(' ')[0]})
-    #
-    #                 if response_line.find('Stepper status:') >= 0:
-    #                     status.update({"program_status": ' '.join(response_line.split(' ')[2:]).strip()[:-1]})
-    #
-    #             if response_list[-2].find('No program is running.') >= 0:
-    #                 status.update({"program_name": None})
-    #                 status.update({"step_num": None})
-    #             else:
-    #                 status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
-    #                 status.update({"step_num": response_list[-2].split()[2]})
-    #
-    #             self.robot_is_busy = False
-    #
-    #             print(status)
-    #             return status
-    #
-    #     self.robot_is_busy = False
-    #
     # def abort_rcp(self, standalone=True):
     #     if standalone:
     #         self.robot_is_busy = True
@@ -761,11 +640,9 @@ class KHITelnetLib:
     #     #print(msg)  # TODO: перенести логирование в верхний уровень
     #     pass
 
+
 def pack_threads(*threads):
-    packed = 0
-    for thread in threads:
-        packed |= 1 << (thread - 1)  # Set the bit representing the thread
-    return packed
+    return sum(1 << (thread - 1) for thread in threads)
 
 
 if __name__ == "__main__":
@@ -773,8 +650,9 @@ if __name__ == "__main__":
     PORT = 9105         # Port for K-Roset
 
     robot = KHITelnetLib(IP, PORT)
-    #print(robot.robot_state())
-    #print(robot.status_pc(31))
-    print(robot.status_rcp())
-
+    with open("../as_programs/large.as") as file:
+        file_string = file.read()
+        start = time.perf_counter()
+        robot.upload_program(file_string, proceed_on_error=True)
+    print((time.perf_counter() - start) / 15)
     robot.close_connection()
