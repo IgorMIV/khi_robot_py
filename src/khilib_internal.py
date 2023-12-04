@@ -1,44 +1,39 @@
-import socket
-import time
+import math
 from telnet_client import TelnetClient
 from robot_exception import *
-import math
 
-MAX_BYTES_TO_READ = 1024
+
+# One package size in bytes for splitting large programs. Slightly faster at higher values
+# It's 2918 bytes in KIDE and robot is responding for up to 3064 bytes
 UPLOAD_BATCH_SIZE = 2500
+
 error_counter_limit = 1000000
 
-
-FOOTER_MSG = b"\n"                              # "\n"
-NEWLINE_MSG = b"\x0d\x0a\x3e"                   # "\n\d>"
-CONFIRMATION_REQUEST = b'\x30\x29\x20'          # Are you sure ? (Yes:1, No:0)?
-SYNTAX_ERRORS = b"\x61\x62\x6f\x72\x74\x29"     # "abort)"
-TRANSMISSION_STATUS = b"\x73\x29\x0d\x0a\x3e"   # end of "errors)"
-HARD_ABORT = b"\x05\x02\x45\x17"                #
-PKG_RECV = b"\x05\x02\x43\x17"                  #
+NEWLINE_MSG = b"\x0d\x0a\x3e"                      # "\r\n>" - Message when clearing terminal
+PKG_RECV = b"\x05\x02\x43\x17"                     # Byte sequence when program batch is accepted
+SYNTAX_ERROR = b"\x61\x62\x6f\x72\x74\x29"         # "abort)" - Message when syntax error is found
+TRANSMISSION_STATUS = b"\x73\x29\x0d\x0a\x3e"      # end of "N errors)"
+SAVE_LOAD_ERROR = b"\x65\x73\x73\x2e\x0d\x0a\x3e"  # Byte sequence when previous save/load operation was interrupted
+HARD_ABORT = b"\x05\x02\x45\x17"                   #
+CONFIRMATION_REQUEST = b'\x30\x29\x20'             # Are you sure ? (Yes:1, No:0)?
 
 
 class KHITelnetLib:
     def __init__(self, ip, port):
         self._ip_address = ip
         self._port_number = port
-
         self._client = TelnetClient(ip, port)
-        self._connectionEstablished = False
 
         self.robot_is_busy = False
+        self._connect()
 
-        if self.connect() != 1:
-            raise RobotConnError()
-
-    def connect(self):
+    def _connect(self):
         try:
             self._client.wait_recv(b"login")              # Send 'as' as login for kawasaki telnet terminal
             self._client.send_msg("as")                   # Confirm with carriage return and line feed control symbols
             self._client.wait_recv(NEWLINE_MSG)           # wait for '>' symbol of a kawasaki terminal new line
         except (TimeoutError, ConnectionRefusedError):
-            return 0
-        return 1
+            raise RobotConnError()
 
     def handshake(self):
         """ Performs a handshake with the robot and raises an exception if something fails """
@@ -150,9 +145,6 @@ class KHITelnetLib:
         return status
 
     def upload_program(self, program_string: str, proceed_on_error: bool = True):
-        # one package size for splitting large programs.
-        # is 2918 bytes in KIDE and robot is responding for up to 3064 bytes
-
         program_bytes = bytes(program_string, 'utf-8') + NEWLINE_MSG
         num_packages = math.ceil(len(program_bytes) / UPLOAD_BATCH_SIZE)
         file_packages = []
@@ -164,27 +156,25 @@ class KHITelnetLib:
         self._client.send_msg("LOAD using.rcc")  # Enable loading mode
         self._client.send_bytes(bytes.fromhex('02 41 20 20 20 20 30 17'))
 
-        if (b'\x65\x73\x73\x2e\x0d\x0a\x3e' in  # End of 'SAVE/LOAD in progress.'
-                self._client.wait_recv(b'Loading...(using.rcc)' + b'\x0d\x0a', b'\x65\x73\x73\x2e\x0d\x0a\x3e')):
+        if SAVE_LOAD_ERROR in self._client.wait_recv(b'Loading...(using.rcc)\r\n', SAVE_LOAD_ERROR):
             raise RobotProgTransmissionError("SAVE/LOAD in progress")
 
         errors = []
         for byte_package in file_packages:
             self._client.send_bytes(byte_package)
-            kawasaki_msg = self._client.wait_recv(SYNTAX_ERRORS, HARD_ABORT, PKG_RECV)
-            if proceed_on_error and SYNTAX_ERRORS in kawasaki_msg:
+            kawasaki_msg = self._client.wait_recv(SYNTAX_ERROR, HARD_ABORT, PKG_RECV)
+            if proceed_on_error and SYNTAX_ERROR in kawasaki_msg:
                 while PKG_RECV not in kawasaki_msg:
                     errors.append(kawasaki_msg)
                     self._client.send_msg("0\n")  # confirm to comment line with error and proceed
-                    kawasaki_msg = self._client.wait_recv(PKG_RECV, SYNTAX_ERRORS)
-            elif not proceed_on_error and SYNTAX_ERRORS in kawasaki_msg:
+                    kawasaki_msg = self._client.wait_recv(PKG_RECV, SYNTAX_ERROR)
+            elif not proceed_on_error and SYNTAX_ERROR in kawasaki_msg:
                 self._client.send_msg("1\n")  # confirm to delete program and abort transmission
                 break
             elif HARD_ABORT in kawasaki_msg:
                 break
-        self._client.send_bytes(bytes.fromhex('02 43 20 20 20 20 30 1a 17'
-                                              '02 45 20 20 20 20 30 17'))  # Cancel loading mode
-        _ = self._client.wait_recv(SYNTAX_ERRORS, TRANSMISSION_STATUS)
+        self._client.send_bytes(bytes.fromhex('02 43 20 20 20 20 30 1a 17 02 45 20 20 20 20 30 17'))  # Cancel loading
+        _ = self._client.wait_recv(SYNTAX_ERROR, TRANSMISSION_STATUS)
         if len(errors) > 0:
             raise RobotProgSyntaxError(errors)
 
@@ -652,7 +642,5 @@ if __name__ == "__main__":
     robot = KHITelnetLib(IP, PORT)
     with open("../as_programs/large.as") as file:
         file_string = file.read()
-        start = time.perf_counter()
         robot.upload_program(file_string, proceed_on_error=True)
-    print((time.perf_counter() - start) / 15)
     robot.close_connection()
