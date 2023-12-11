@@ -9,7 +9,6 @@ Constants:
 
 import socket
 
-MAX_BYTES_TO_READ = 1024
 RECV_TIMEOUT = 1
 SERVER_TIMEOUT = 10
 
@@ -23,26 +22,23 @@ class TelnetClient:
         self._client.settimeout(SERVER_TIMEOUT)                           # Set time limit for connecting to robot
         self._client.connect((self._robot_ip, self._robot_port))
 
-    def send_msg(self, cmd: str, end: bytes = b'\n'):
+    def send_msg(self, cmd: str, end: bytes = b'\n') -> None:
         """ sends a command to the robot """
         self._client.sendall(cmd.encode() + end)
 
-    def send_bytes(self, cmd: bytes):
+    def send_bytes(self, cmd: bytes) -> None:
         self._client.sendall(cmd)
 
     def wait_recv(self, *ends: b'') -> bytes:
         """ Waits to receive data from the robot until one of the specified end markers is encountered """
         incoming = b""
         while True:
-            if not (recv := self._client.recv(MAX_BYTES_TO_READ)):
-                return b""
-            incoming += recv
+            incoming += self._client.recv(1)  # Receive symbols one-by-one from socket
             for eom in ends:
                 if incoming.find(eom) > -1:  # Wait eom message from robot
                     return incoming
 
-    def disconnect(self):
-        """ Closes socket without checks """
+    def disconnect(self) -> None:
         self._client.close()
 
     @staticmethod
@@ -59,10 +55,3 @@ class TelnetClient:
         if 0 < port < 65535:
             return port
         raise ValueError(f"{port} is not a valid port number")
-
-
-if __name__ == "__main__":
-    robot = TelnetClient("127.0.0.1", 9105)
-    robot.send_msg("list")
-    print(robot.wait_recv(b'\x0d\x0a\x3e').decode("UTF-8"))
-    robot.disconnect()

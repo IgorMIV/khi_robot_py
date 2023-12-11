@@ -1,17 +1,23 @@
 import math
+import time
+
 from telnet_client import TelnetClient
 from robot_exception import *
 
 
 # One package size in bytes for splitting large programs. Slightly faster at higher values
-# It's 2918 bytes in KIDE and robot is responding for up to 3064 bytes
-UPLOAD_BATCH_SIZE = 2500
+# It's 2962 bytes in KIDE and robot is responding for up to 3064 bytes
+UPLOAD_BATCH_SIZE = 2962
 
 error_counter_limit = 1000000
 
 NEWLINE_MSG = b"\x0d\x0a\x3e"                      # "\r\n>" - Message when clearing terminal
+
+START_LOADING = b"LOAD using.rcc\n" + bytes.fromhex('02 41 20 20 20 20 30 17')
+CANCEL_LOADING = bytes.fromhex('02 43 20 20 20 20 30 1a 17 02 45 20 20 20 20 30 17')
 PKG_RECV = b"\x05\x02\x43\x17"                     # Byte sequence when program batch is accepted
-SYNTAX_ERROR = b"\x61\x62\x6f\x72\x74\x29"         # "abort)" - Message when syntax error is found
+# SYNTAX_ERROR = b"\x61\x62\x6f\x72\x74\x29"         # "abort)" - Message when syntax error is found
+SYNTAX_ERROR = "\r\nSTEP syntax error.\r\n(0:Change to comment and continue, 1:Delete program and abort)\r\n".encode()
 TRANSMISSION_STATUS = b"\x73\x29\x0d\x0a\x3e"      # end of "N errors)"
 SAVE_LOAD_ERROR = b"\x65\x73\x73\x2e\x0d\x0a\x3e"  # Byte sequence when previous save/load operation was interrupted
 HARD_ABORT = b"\x05\x02\x45\x17"                   #
@@ -144,39 +150,59 @@ class KHITelnetLib:
                 status.update({"step_num": response_list[-2].split()[2]})
         return status
 
-    def upload_program(self, program_string: str, proceed_on_error: bool = True):
-        program_bytes = bytes(program_string, 'utf-8') + NEWLINE_MSG
-        num_packages = math.ceil(len(program_bytes) / UPLOAD_BATCH_SIZE)
-        file_packages = []
-        for idx in range(num_packages):
-            pkg = (b'\x02\x43\x20\x20\x20\x20\x30'
-                   + program_bytes[idx * UPLOAD_BATCH_SIZE: (idx + 1) * UPLOAD_BATCH_SIZE] + b'\x17')
-            file_packages.append(pkg)
+    def upload_program(self, program_string: str, proceed_on_error: bool = True) -> None:
+        """
+        Uploads a program to the robot.
 
-        self._client.send_msg("LOAD using.rcc")  # Enable loading mode
-        self._client.send_bytes(bytes.fromhex('02 41 20 20 20 20 30 17'))
+        Args:
+            program_string (str): Text of the program to upload.
+            proceed_on_error (bool, optional): Flag to continue uploading on encountering errors.
+                                               When True, lines with errors will be commented
+
+        Raises:
+            RobotProgTransmissionError: If there is an error during transmission.
+            RobotProgSyntaxError: If there are syntax errors in the uploaded program.
+
+        Returns:
+            None
+        """
+        program_bytes = bytes(program_string, "utf-8")
+        num_packages = math.ceil(len(program_bytes) / UPLOAD_BATCH_SIZE)
+        file_packages = [
+            (b"\x02\x43\x20\x20\x20\x20\x30"
+             + program_bytes[idx * UPLOAD_BATCH_SIZE: (idx + 1) * UPLOAD_BATCH_SIZE] + b"\x17")
+            for idx in range(num_packages)
+        ]
+
+        self._client.send_bytes(START_LOADING)
 
         if SAVE_LOAD_ERROR in self._client.wait_recv(b'Loading...(using.rcc)\r\n', SAVE_LOAD_ERROR):
             raise RobotProgTransmissionError("SAVE/LOAD in progress")
 
-        errors = []
+        errors_string = b""
         for byte_package in file_packages:
             self._client.send_bytes(byte_package)
-            kawasaki_msg = self._client.wait_recv(SYNTAX_ERROR, HARD_ABORT, PKG_RECV)
-            if proceed_on_error and SYNTAX_ERROR in kawasaki_msg:
-                while PKG_RECV not in kawasaki_msg:
-                    errors.append(kawasaki_msg)
-                    self._client.send_msg("0\n")  # confirm to comment line with error and proceed
-                    kawasaki_msg = self._client.wait_recv(PKG_RECV, SYNTAX_ERROR)
-            elif not proceed_on_error and SYNTAX_ERROR in kawasaki_msg:
-                self._client.send_msg("1\n")  # confirm to delete program and abort transmission
+            response = self._client.wait_recv(SYNTAX_ERROR, HARD_ABORT, PKG_RECV)
+
+            while proceed_on_error and SYNTAX_ERROR in response:
+                errors_string += response
+                self._client.send_msg("0\n")
+                self._client.wait_recv(b"0\r\n")
+                response = self._client.wait_recv(PKG_RECV, SYNTAX_ERROR)
+
+            if not proceed_on_error and SYNTAX_ERROR in response:  # On error delete program and abort transmission
+                errors_string += response
+                self._client.send_msg("1\n")
                 break
-            elif HARD_ABORT in kawasaki_msg:
+
+            if HARD_ABORT in response:  # Maybe unused
                 break
-        self._client.send_bytes(bytes.fromhex('02 43 20 20 20 20 30 1a 17 02 45 20 20 20 20 30 17'))  # Cancel loading
-        _ = self._client.wait_recv(SYNTAX_ERROR, TRANSMISSION_STATUS)
-        if len(errors) > 0:
-            raise RobotProgSyntaxError(errors)
+
+        self._client.send_bytes(CANCEL_LOADING)
+        self._client.wait_recv(SYNTAX_ERROR, TRANSMISSION_STATUS)
+
+        if errors_string:
+            raise RobotProgSyntaxError(errors_string.split(SYNTAX_ERROR))
 
     def delete_program(self, program_name):
         self._client.send_msg("DELETE/P/D " + program_name)
