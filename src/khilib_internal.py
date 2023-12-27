@@ -7,7 +7,7 @@ from robot_exception import *
 
 # One package size in bytes for splitting large programs. Slightly faster at higher values
 # It's 2962 bytes in KIDE and robot is responding for up to 3064 bytes
-UPLOAD_BATCH_SIZE = 2962
+UPLOAD_BATCH_SIZE = 1000
 
 error_counter_limit = 1000000
 
@@ -16,12 +16,13 @@ NEWLINE_MSG = b"\x0d\x0a\x3e"                      # "\r\n>" - Message when clea
 START_LOADING = b"LOAD using.rcc\n" + bytes.fromhex('02 41 20 20 20 20 30 17')
 CANCEL_LOADING = bytes.fromhex('02 43 20 20 20 20 30 1a 17 02 45 20 20 20 20 30 17')
 PKG_RECV = b"\x05\x02\x43\x17"                     # Byte sequence when program batch is accepted
-# SYNTAX_ERROR = b"\x61\x62\x6f\x72\x74\x29"         # "abort)" - Message when syntax error is found
 SYNTAX_ERROR = "\r\nSTEP syntax error.\r\n(0:Change to comment and continue, 1:Delete program and abort)\r\n".encode()
-TRANSMISSION_STATUS = b"\x73\x29\x0d\x0a\x3e"      # end of "N errors)"
+CONFIRM_TRANSMISSION = b"\x73\x29\x0d\x0a\x3e"      # end of "N errors)"
 SAVE_LOAD_ERROR = b"\x65\x73\x73\x2e\x0d\x0a\x3e"  # Byte sequence when previous save/load operation was interrupted
 HARD_ABORT = b"\x05\x02\x45\x17"                   #
 CONFIRMATION_REQUEST = b'\x30\x29\x20'             # Are you sure ? (Yes:1, No:0)?
+
+NOT_EXIST_ERR = "Program does not exist.".encode()
 
 
 class KHITelnetLib:
@@ -39,13 +40,13 @@ class KHITelnetLib:
             self._client.send_msg("as")                   # Confirm with carriage return and line feed control symbols
             self._client.wait_recv(NEWLINE_MSG)           # wait for '>' symbol of a kawasaki terminal new line
         except (TimeoutError, ConnectionRefusedError):
-            raise RobotConnError()
+            raise KawaConnError()
 
     def handshake(self):
         """ Performs a handshake with the robot and raises an exception if something fails """
         self._client.send_msg("")                         # Send empty command
         if not self._client.wait_recv(NEWLINE_MSG):       # Wait for newline symbol
-            raise RobotConnError()
+            raise KawaConnError()
 
     def ereset(self):
         self._client.send_msg("ERESET")
@@ -55,8 +56,7 @@ class KHITelnetLib:
         self._client.disconnect()
 
     def robot_state(self) -> dict:
-        """
-        Checks various internal state variables of a Kawasaki robot and returns them as a dictionary.
+        """ Checks various internal state variables of a Kawasaki robot and returns them as a dictionary.
 
         Returns:
             dict: A dictionary containing the following state variables:
@@ -95,8 +95,7 @@ class KHITelnetLib:
         return state
 
     def status_pc(self, threads: int) -> [dict]:
-        """
-        Checks the running status of a list of PC programs based on a packed integer representing threads to check.
+        """ Checks the running status of a list of PC programs based on a packed integer representing threads to check.
 
         Args:
             threads (int): An integer representing the threads to be checked for status. The first five bits
@@ -151,8 +150,7 @@ class KHITelnetLib:
         return status
 
     def upload_program(self, program_string: str, proceed_on_error: bool = True) -> None:
-        """
-        Uploads a program to the robot.
+        """ Uploads a program to the robot.
 
         Args:
             program_string (str): Text of the program to upload.
@@ -177,7 +175,7 @@ class KHITelnetLib:
         self._client.send_bytes(START_LOADING)
 
         if SAVE_LOAD_ERROR in self._client.wait_recv(b'Loading...(using.rcc)\r\n', SAVE_LOAD_ERROR):
-            raise RobotProgTransmissionError("SAVE/LOAD in progress")
+            raise KawaProgTransmissionError("SAVE/LOAD in progress")
 
         errors_string = b""
         for byte_package in file_packages:
@@ -185,281 +183,83 @@ class KHITelnetLib:
             response = self._client.wait_recv(SYNTAX_ERROR, HARD_ABORT, PKG_RECV)
 
             while proceed_on_error and SYNTAX_ERROR in response:
+                # Filter "Program abc()\r\n " program name confirmation occurring in random places
+                response = response[response.find(b"()\r\n ") + 5:] if (response.startswith(b"Program") and
+                                                                        b"()\r\n " in response) else response
                 errors_string += response
-                self._client.send_msg("0\n")
+                self._client.send_msg("0")
                 self._client.wait_recv(b"0\r\n")
                 response = self._client.wait_recv(PKG_RECV, SYNTAX_ERROR)
-
             if not proceed_on_error and SYNTAX_ERROR in response:  # On error delete program and abort transmission
                 errors_string += response
-                self._client.send_msg("1\n")
+                self._client.send_msg("1")
+                self._client.wait_recv(b"1\r\n")
                 break
 
             if HARD_ABORT in response:  # Maybe unused
                 break
 
         self._client.send_bytes(CANCEL_LOADING)
-        self._client.wait_recv(SYNTAX_ERROR, TRANSMISSION_STATUS)
+        self._client.wait_recv(CONFIRM_TRANSMISSION)
 
         if errors_string:
-            raise RobotProgSyntaxError(errors_string.split(SYNTAX_ERROR))
+            raise KawaProgSyntaxError(errors_string.split(SYNTAX_ERROR))
 
-    def delete_program(self, program_name):
+    def delete_program(self, program_name: str) -> None:
         self._client.send_msg("DELETE/P/D " + program_name)
         self._client.wait_recv(CONFIRMATION_REQUEST)
         self._client.send_msg("1")
         self._client.wait_recv(b"\x31\x0d\x0a\x3e")
 
-    # def abort_pc(self, *threads: int, program_name: str = "") -> [str]:
-    #     # type(list) - [None, 'aborted', 'not_running', None, 'not_running']
-    #     # None - if don't know about this process
-    #     # 'aborted' - PC program aborted success
-    #     # 'not_running' - PC program not running
-    #     #
-    #     # -1 - abort error
-    #     # -1000 - communication error
-    #
-    #     if program_name and len(threads) != 0:
-    #         print("Error:")
-    #         print("Abort program by name and by thread number doesn't support")
-    #         return -1
-    #
-    #     abort_num = []
-    #
-    #     if program_name is None:
-    #         if len(threads) is None:  # Check all threads
-    #             abort_num = [1, 2, 3, 4, 5]
-    #         elif len(threads) == 1:
-    #             thread = threads[0]
-    #             if (thread <= 5) and (thread > 0):
-    #                 abort_num = [thread]
-    #             else:
-    #                 print("The num. of thread is out of range")
-    #                 self.close_connection()
-    #                 self.robot_is_busy = False
-    #                 return -1
-    #
-    #         else:
-    #             for thread in threads:
-    #
-    #                 if (thread <= 5) and (thread > 0):
-    #                     if thread in abort_num:
-    #                         print("The num. of thread is duplicating")
-    #                         self.close_connection()
-    #                         self.robot_is_busy = False
-    #                         return -1
-    #                     abort_num.append(thread)
-    #                 else:
-    #                     print("Num of thread", thread, "out of range: 1-5")
-    #                     self.close_connection()
-    #                     self.robot_is_busy = False
-    #                     return -1
-    #
-    #     else:  # Program name is not None
-    #         pc_status = self.status_pc()
-    #         for idx in range(len(pc_status)):
-    #             process = pc_status[idx]
-    #             if process['program_name'] == program_name:
-    #                 abort_num.append(idx + 1)
-    #
-    #     if not abort_num:
-    #         print("PC program " + program_name + " not found")
-    #         return -1
-    #
-    #     self.robot_is_busy = True
-    #
-    #     if self._handshake() < 0:
-    #         return -1000
-    #
-    #     # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
-    #     pc_abort_list = [""] * 5
-    #
-    #     for thread in abort_num:
-    #         # PCABORT
-    #         self._client.sendall(b'PCABORT ' + bytes(str(thread), "UTF-8") + b':')
-    #         self._client.sendall(b'\x0a')
-    #
-    #         error_counter = 0
-    #         while True:
-    #             error_counter += 1
-    #             receive_string = self._client.recv(4096, socket.MSG_PEEK)
-    #             # print("RCV", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
-    #             if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-    #                 receive_string = self._client.recv(4096)
-    #                 result_msg = receive_string.decode("utf-8", 'ignore')
-    #                 break
-    #
-    #             if error_counter > error_counter_limit:
-    #                 print("PCABORT CTE")
-    #                 self.add_to_log("PCABORT CTE")
-    #                 self.close_connection()
-    #                 return -1000
-    #
-    #         if result_msg.find('PC program aborted.No') >= 0:
-    #             pc_abort_list[thread - 1] = 'aborted'
-    #         else:
-    #             pc_abort_list[thread - 1] = 'not_running'
-    #
-    #     return pc_abort_list
-    #
-    # def execute_pc(self, program_name: str, thread: int):
-    #     #  Return:
-    #     # 1 - everything is ok
-    #     # -1000 - communication with robot was aborted
-    #
-    #     if type(thread) == int:
-    #         if (thread > 5) or (thread < 1):
-    #             print("Error: Num of thread", thread, "out of range: 1-5")
-    #             self.robot_is_busy = False
-    #             return -1
-    #     else:
-    #         print("Error: Thread should be integer number")
-    #         self.robot_is_busy = False
-    #         return -1
-    #
-    #     self.ereset()
-    #
-    #     status = self.status_pc()
-    #     kill_list = []
-    #     for idx in range(len(status)):
-    #         thread_status = status[idx]
-    #         if thread_status['program_name'] == program_name:
-    #             kill_list.append(idx + 1)
-    #
-    #     if thread not in kill_list:
-    #         kill_list.append(thread)
-    #
-    #     self.abort_pc(*kill_list)
-    #     self.kill_pc(*kill_list)
-    #
-    #     self.robot_is_busy = True
-    #
-    #     if self._handshake() < 0:
-    #         return -1000
-    #
-    #     # EXECUTE program
-    #     self._client.sendall(b'PCEXECUTE ' + bytes(str(thread), 'utf-8') + b':' + program_name.encode())
-    #     self._client.sendall(b'\x0a')
-    #
-    #     while True:
-    #         receive_string = self._client.recv(4096, socket.MSG_PEEK)
-    #         # print(receive_string.decode("utf-8", 'ignore'), receive_string.hex())
-    #         if receive_string.find(b'Program does not exist.') >= 0:
-    #             # This is AS monitor terminal.. Wait '>' sign from robot
-    #             receive_string = self._client.recv(4096)
-    #             self.add_to_log("Program does not exist " + receive_string.decode("utf-8", 'ignore') +
-    #                             ":" + receive_string.hex())
-    #             print("Program " + program_name + " does not exist")
-    #
-    #             self.robot_is_busy = False
-    #             return -1
-    #
-    #         if receive_string.find(b'\x0d\x0a\x3e') >= 0:  # This is AS monitor terminal..  Wait '>' sign from robot
-    #             receive_string = self._client.recv(4096)
-    #             self.add_to_log("PC program run " + receive_string.decode("utf-8", 'ignore') +
-    #                             ":" + receive_string.hex())
-    #             print("PC " + program_name + " run")
-    #
-    #             self.robot_is_busy = False
-    #             return 1
-    #
-    # def kill_pc(self, *threads: int, program_name: str = ""):
-    #     # type(list) - [None, 'killed', 'not_killed', None, None]
-    #     # None - Don't know about this process
-    #     # 'killed' - PC program killed success
-    #     # 'not_running' - PC program not running
-    #     #
-    #     # -1 - illegal input parameters
-    #     # -1000 - communication error
-    #
-    #     if program_name and len(threads) != 0:
-    #         print("Error: Kill program by name and by thread number doesn't support")
-    #         return -1
-    #
-    #     kill_num = []
-    #     if not program_name:
-    #         if threads is None:  # Check all threads
-    #             kill_num = [1, 2, 3, 4, 5]
-    #         elif len(threads) == 1:
-    #             kill_num = threads
-    #         else:
-    #             for element in threads:
-    #                 if type(element) == int:
-    #                     if (element <= 5) and (element > 0):
-    #                         if element in kill_num:
-    #                             print("The num. of thread is duplicating")
-    #                             self.close_connection()
-    #                             self.robot_is_busy = False
-    #                             return -1
-    #                         kill_num.append(element)
-    #                     else:
-    #                         print("Num of thread", element, "out of range: 1-5")
-    #                         self.close_connection()
-    #                         self.robot_is_busy = False
-    #                         return -1
-    #                 else:
-    #                     print("Num of thread should be int")
-    #                     self.close_connection()
-    #                     self.robot_is_busy = False
-    #                     return -1
-    #     else:
-    #         pc_status = self.status_pc()
-    #         for idx in range(len(pc_status)):
-    #             process = pc_status[idx]
-    #             if process['program_name'] == program_name:
-    #                 kill_num.append(idx + 1)
-    #
-    #     if not kill_num:
-    #         print("PC program " + program_name + " not found")
-    #         return -1
-    #
-    #     self.robot_is_busy = True
-    #
-    #     if self._handshake() < 0:
-    #         return -1000
-    #
-    #     # receive_string = self.server.recv(4096)  # CLEAN ALL DATA IN BUFFER
-    #     pc_kill_list = [""] * 5
-    #
-    #     for thread in kill_num:
-    #         # PCKILL
-    #         self._client.sendall(b'PCKILL ' + bytes(str(thread), "UTF-8") + b':')
-    #         self._client.sendall(b'\x0a')
-    #
-    #         error_counter = 0
-    #         result_msg = b""
-    #
-    #         while True:
-    #             error_counter += 1
-    #             receive_string = self._client.recv(4096, socket.MSG_PEEK)
-    #
-    #             # print("RCV", receive_string.decode("utf-8", 'ignore'), receive_string.hex())
-    #
-    #             if receive_string.find(b'\x0d\x0a\x3e') >= 0:
-    #                 receive_string = self._client.recv(4096)
-    #                 result_msg = receive_string
-    #                 break
-    #
-    #             if receive_string.find(b'\x30\x29\x20') >= 0:  # Are you sure ? (Yes:1, No:0)?
-    #                 self._client.recv(4096)
-    #                 tmp = bytes.fromhex('31 0a')  # Delete program and abort
-    #                 self._client.sendall(tmp)
-    #                 continue
-    #
-    #             if error_counter > error_counter_limit:
-    #                 print("PCKILL CTE")
-    #                 self.add_to_log("PCKILL CTE")
-    #                 self.close_connection()
-    #                 return -1000
-    #
-    #         if result_msg.find(b'Cannot KILL program that is running.') >= 0:
-    #             pc_kill_list[thread - 1] = 'not_killed'
-    #         elif result_msg.find(b'\x31\x0d\x0a\x3e') >= 0:
-    #             pc_kill_list[thread - 1] = 'killed'
-    #         else:
-    #             pc_kill_list[thread - 1] = 'unknown'
-    #
-    #     return pc_kill_list
+    def execute_pc(self, program_name: str, thread: int) -> None:
+        """ Executes PC program on selected thread
+        Args:
+             program_name (str): Name of a PC program inside robot's memory to be executed
+             thread (int): PC program thread
+        """
+        self._client.send_msg(f"PCEXECUTE {str(thread)}: {program_name}")
+        if NOT_EXIST_ERR in self._client.wait_recv(NEWLINE_MSG, NOT_EXIST_ERR):
+            raise KawaProgNotExistError(program_name)
+
+    def abort_pc(self, threads: int) -> None:
+        """ Aborts running PC programs on selected threads.
+        Args: threads (int): An integer representing the threads to be checked for status.
+                             See "status_pc" for more info
+        """
+        for thread in range(5):
+            if threads & (1 << thread):
+                self._client.send_msg(f"PCABORT {thread + 1}:")
+                self._client.wait_recv(NEWLINE_MSG)
+
+    def kill_pc(self, threads: int):
+
+        for thread in range(5):
+            if threads & (1 << thread):
+                self._client.send_msg(f"PCKILL {thread + 1}:")
+                res = self._client.wait_recv(NEWLINE_MSG, CONFIRMATION_REQUEST)
+                if CONFIRMATION_REQUEST in res:
+                    self._client.send_msg("1\n")
+
+                    if receive_string.find(b'\x30\x29\x20') >= 0:  # Are you sure ? (Yes:1, No:0)?
+                        self._client.recv(4096)
+                        tmp = bytes.fromhex('31 0a')  # Delete program and abort
+                        self._client.sendall(tmp)
+                        continue
+
+                    if error_counter > error_counter_limit:
+                        print("PCKILL CTE")
+                        self.add_to_log("PCKILL CTE")
+                        self.close_connection()
+                        return -1000
+
+                if result_msg.find(b'Cannot KILL program that is running.') >= 0:
+                    pc_kill_list[thread - 1] = 'not_killed'
+                elif result_msg.find(b'\x31\x0d\x0a\x3e') >= 0:
+                    pc_kill_list[thread - 1] = 'killed'
+                else:
+                    pc_kill_list[thread - 1] = 'unknown'
+
+        return pc_kill_list
     #
     # def execute_rcp(self, program_name, wait_complete=False):
     #     #  Return:
@@ -669,4 +469,5 @@ if __name__ == "__main__":
     with open("../as_programs/large.as") as file:
         file_string = file.read()
         robot.upload_program(file_string, proceed_on_error=True)
+        robot.delete_program("large")
     robot.close_connection()
