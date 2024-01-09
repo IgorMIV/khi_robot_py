@@ -1,6 +1,7 @@
 import math
 import time
-
+from utils.robot_state import RobotState, ROBOT_STATE_VARS
+from utils.pc_thread_state import ThreadState
 from telnet_client import TelnetClient
 from robot_exception import *
 
@@ -55,46 +56,35 @@ class KHITelnetLib:
     def close_connection(self):
         self._client.disconnect()
 
-    def robot_state(self) -> dict:
-        """ Checks various internal state variables of a Kawasaki robot and returns them as a dictionary.
+    def get_robot_state(self) -> RobotState:
+        """
+        Checks various internal state variables of a Kawasaki robot and returns them as a RobotState data class.
 
         Returns:
-            dict: A dictionary containing the following state variables:
-                - 'motor_power' (bool): Current state of the motor power (ON/OFF).
-                - 'cycle_start' (bool): State of the cycle start switch (ON/OFF).
-                - 'repeat' (bool): State of the repeat switch (ON/OFF).
-                - 'run' (bool): State of the run switch (ON/OFF).
-                - 'error' (str / bool): If an error is detected, the description of the error; otherwise, False.
+            RobotState: A data class representing the robot's state.
 
         Note:
-            This function sends commands to a Kawasaki robot via a client connection (`self._client`)
+            This function sends commands to a Kawasaki robot through a client connection
             to retrieve internal state variables and their descriptions, if available.
-            Variables to check might be added via state_vars, where first element of tuple is
-            a key in dictionary, and second - command that is sent to the robot
         """
-        state = {}
-        state_vars = (("motor_power", "SWITCH POWER"),
-                      ("cycle_start", "SWITCH CS"),
-                      ("cycle_start", "SWITCH RGSO"),
-                      ("error", "SWITCH ERROR"),
-                      ("repeat", "SWITCH REPEAT"),
-                      ("run", "SWITCH RUN"))
 
-        for var, msg in state_vars:
+        state = RobotState()
+        for attr, msg in ROBOT_STATE_VARS:
             self._client.send_msg(msg)
-            res = True if self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON" else False
-            if var != "error":
-                state.update({var: res})
-                continue
-            if res:
-                self._client.send_msg("type $ERROR(ERROR)")
-                error_descr = self._client.wait_recv(NEWLINE_MSG).decode()
-                state.update({var: ' '.join(error_descr.split('\r\n')[1:-1])})
-            else:
-                state.update({var: res})
+            state.__setattr__(attr, self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON")
+        if state.error:
+            self._client.send_msg("type $ERROR(ERROR)")
+            error_descr = self._client.wait_recv(NEWLINE_MSG).decode()
+            state.error_descr = ' '.join(error_descr.split('\r\n')[1:-1])
         return state
 
-    def status_pc(self, threads: int) -> [dict]:
+    def get_system_switch_state(self, switch_name: str):
+        pass  # TODO: Change get_robot_state functionality into get/set robot system switches
+
+    def set_system_switch_state(self, switch_name: str, state: bool):
+        pass
+
+    def get_pc_status(self, threads: int) -> [ThreadState]:
         """ Checks the running status of a list of PC programs based on a packed integer representing threads to check.
 
         Args:
@@ -114,21 +104,22 @@ class KHITelnetLib:
             input validation and packing is done, but for testing it can be called directly
             with help of utility function "pack_threads(*args)" provided in this module
         """
-        pc_status_list = [{} for _ in range(5)]
+        # TODO: Check of works
+        pc_status_list = [ThreadState for _ in range(5)]
         for thread in range(5):
             if threads & (1 << thread):  # Unpack threads from 5-bit integer representation
                 self._client.send_msg(f"PCSTATUS {thread + 1}:")
                 status = self._client.wait_recv(NEWLINE_MSG).decode().split("\r\n")[1:]   # Split by newlines
-                pc_status_list[thread].update({"Program name": status[-2].split()[0]})    # Get program name
+                pc_status_list[thread].name = status[-2].split()[0]                       # Get program name
                 split = [" ".join(el.split()).split(": ") for el in status if ":" in el]  # Get lines like "key: value"
                 for key, value in split:
                     if "PC status" in key:
-                        pc_status_list[thread].update({"Running": False if "not running" in value else True})
+                        pc_status_list[thread].running = "not running" not in value
                         continue
-                    pc_status_list[thread].update({key: int(value)})
+                    pc_status_list[thread].__setattr__(key, value)
         return pc_status_list
 
-    def status_rcp(self) -> dict:
+    def get_rcp_status(self) -> dict:
         status = {}
         self._client.send_msg("STATUS")
         if (result_msg := self._client.wait_recv(NEWLINE_MSG)) and len(result_msg) > 10:
@@ -183,7 +174,7 @@ class KHITelnetLib:
             response = self._client.wait_recv(SYNTAX_ERROR, HARD_ABORT, PKG_RECV)
 
             while proceed_on_error and SYNTAX_ERROR in response:
-                # Filter "Program abc()\r\n " program name confirmation occurring in random places
+                # Filter "Program ___()\r\n " uploading program confirmation occurring in random places
                 response = response[response.find(b"()\r\n ") + 5:] if (response.startswith(b"Program") and
                                                                         b"()\r\n " in response) else response
                 errors_string += response
@@ -209,7 +200,7 @@ class KHITelnetLib:
         self._client.send_msg("DELETE/P/D " + program_name)
         self._client.wait_recv(CONFIRMATION_REQUEST)
         self._client.send_msg("1")
-        self._client.wait_recv(b"\x31\x0d\x0a\x3e")
+        self._client.wait_recv(b"1" + NEWLINE_MSG)
 
     def execute_pc(self, program_name: str, thread: int) -> None:
         """ Executes PC program on selected thread
@@ -232,29 +223,16 @@ class KHITelnetLib:
                 self._client.wait_recv(NEWLINE_MSG)
 
     def kill_pc(self, threads: int):
-
         for thread in range(5):
             if threads & (1 << thread):
                 self._client.send_msg(f"PCKILL {thread + 1}:")
-                res = self._client.wait_recv(NEWLINE_MSG, CONFIRMATION_REQUEST)
-                if CONFIRMATION_REQUEST in res:
+                response = self._client.wait_recv(NEWLINE_MSG, CONFIRMATION_REQUEST)
+                if CONFIRMATION_REQUEST in response:
                     self._client.send_msg("1\n")
-
-                    if receive_string.find(b'\x30\x29\x20') >= 0:  # Are you sure ? (Yes:1, No:0)?
-                        self._client.recv(4096)
-                        tmp = bytes.fromhex('31 0a')  # Delete program and abort
-                        self._client.sendall(tmp)
-                        continue
-
-                    if error_counter > error_counter_limit:
-                        print("PCKILL CTE")
-                        self.add_to_log("PCKILL CTE")
-                        self.close_connection()
-                        return -1000
 
                 if result_msg.find(b'Cannot KILL program that is running.') >= 0:
                     pc_kill_list[thread - 1] = 'not_killed'
-                elif result_msg.find(b'\x31\x0d\x0a\x3e') >= 0:
+                elif b"1" + NEWLINE_MSG in response:
                     pc_kill_list[thread - 1] = 'killed'
                 else:
                     pc_kill_list[thread - 1] = 'unknown'
