@@ -56,33 +56,24 @@ class KHITelnetLib:
     def close_connection(self):
         self._client.disconnect()
 
-    def get_robot_state(self) -> RobotState:
-        """
-        Checks various internal state variables of a Kawasaki robot and returns them as a RobotState data class.
+    def get_system_switch_state(self, switch_name: str) -> bool:
+        """ Sets robot system switch state """
+        self._client.send_msg("SWITCH " + switch_name)
+        return self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON"
 
-        Returns:
-            RobotState: A data class representing the robot's state.
+    def set_system_switch_state(self, switch_name: str, value: bool):
+        """ Sets robot system switch. Note that switch might be read-only,
+            in that case switch value won't be changed """
+        self._client.send_msg(switch_name + "ON" if value else "OFF")
+        self._client.wait_recv(NEWLINE_MSG)
 
-        Note:
-            This function sends commands to a Kawasaki robot through a client connection
-            to retrieve internal state variables and their descriptions, if available.
-        """
-
-        state = RobotState()
-        for attr, msg in ROBOT_STATE_VARS:
-            self._client.send_msg(msg)
-            state.__setattr__(attr, self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON")
-        if state.error:
-            self._client.send_msg("type $ERROR(ERROR)")
-            error_descr = self._client.wait_recv(NEWLINE_MSG).decode()
-            state.error_descr = ' '.join(error_descr.split('\r\n')[1:-1])
-        return state
-
-    def get_system_switch_state(self, switch_name: str):
-        pass  # TODO: Change get_robot_state functionality into get/set robot system switches
-
-    def set_system_switch_state(self, switch_name: str, state: bool):
-        pass
+    def get_error_descr(self):
+        """ Returns robot error state description, empty string if no error """
+        self._client.send_msg("type $ERROR(ERROR)")
+        res = self._client.wait_recv(NEWLINE_MSG).decode()
+        if "Value is out of range." not in res:
+            return ' '.join(res.split('\r\n')[1:-1])
+        return ""
 
     def get_pc_status(self, threads: int) -> [ThreadState]:
         """ Checks the running status of a list of PC programs based on a packed integer representing threads to check.
