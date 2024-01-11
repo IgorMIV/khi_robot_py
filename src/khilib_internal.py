@@ -1,7 +1,5 @@
 import math
-import time
-from utils.robot_state import RobotState, ROBOT_STATE_VARS
-from utils.pc_thread_state import ThreadState
+from utils.thread_state import ThreadState
 from telnet_client import TelnetClient
 from robot_exception import *
 
@@ -31,8 +29,6 @@ class KHITelnetLib:
         self._ip_address = ip
         self._port_number = port
         self._client = TelnetClient(ip, port)
-
-        self.robot_is_busy = False
         self._connect()
 
     def _connect(self):
@@ -43,17 +39,17 @@ class KHITelnetLib:
         except (TimeoutError, ConnectionRefusedError):
             raise KawaConnError()
 
-    def handshake(self):
+    def handshake(self) -> None:
         """ Performs a handshake with the robot and raises an exception if something fails """
         self._client.send_msg("")                         # Send empty command
         if not self._client.wait_recv(NEWLINE_MSG):       # Wait for newline symbol
             raise KawaConnError()
 
-    def ereset(self):
+    def ereset(self) -> None:
         self._client.send_msg("ERESET")
         self._client.wait_recv(NEWLINE_MSG)
 
-    def close_connection(self):
+    def close_connection(self) -> None:
         self._client.disconnect()
 
     def get_system_switch_state(self, switch_name: str) -> bool:
@@ -61,13 +57,13 @@ class KHITelnetLib:
         self._client.send_msg("SWITCH " + switch_name)
         return self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON"
 
-    def set_system_switch_state(self, switch_name: str, value: bool):
+    def set_system_switch_state(self, switch_name: str, value: bool) -> None:
         """ Sets robot system switch. Note that switch might be read-only,
             in that case switch value won't be changed """
         self._client.send_msg(switch_name + "ON" if value else "OFF")
         self._client.wait_recv(NEWLINE_MSG)
 
-    def get_error_descr(self):
+    def get_error_descr(self) -> str:
         """ Returns robot error state description, empty string if no error """
         self._client.send_msg("type $ERROR(ERROR)")
         res = self._client.wait_recv(NEWLINE_MSG).decode()
@@ -75,8 +71,25 @@ class KHITelnetLib:
             return ' '.join(res.split('\r\n')[1:-1])
         return ""
 
+    @staticmethod
+    def _parse_program_thread(robot_msg: str) -> ThreadState:
+        if "Program is not running" not in robot_msg:
+            res = ThreadState()
+            lines = robot_msg.split("\r\n")[1:-1]
+            res.running = True
+            res.name = lines[-1].split()[0]
+            res.step_num = lines[-1].split()[2]
+            for line in lines:
+                if "Completed cycles: " in line:
+                    res.completed_cycles = int(line.split()[-1])
+                elif "Remaining cycles: " in line:
+                    res.remaining_cycles = -1 if "Infinite" in line else int(line.split()[-1])
+                    break  # Because remaining cycles number always last
+            return res
+        return ThreadState()
+
     def get_pc_status(self, threads: int) -> [ThreadState]:
-        """ Checks the running status of a list of PC programs based on a packed integer representing threads to check.
+        """ Checks the status of a list of PC programs based on a packed integer representing threads to check.
 
         Args:
             threads (int): An integer representing the threads to be checked for status. The first five bits
@@ -84,52 +97,27 @@ class KHITelnetLib:
                 A set bit (1) means the corresponding thread's status will be checked.
 
         Returns:
-            list[dict]: A list containing dictionaries, each representing the status of a thread.
-            Each dictionary includes following information:
-             - Program name (str): Name of running program or "No" if no program is running
-             - Running (bool)
-             - Completed cycles (int)
-             - Remaining cycles (int)
+            list[ThreadState]: A list containing data objects, each representing the status of a thread.
+
         Note:
             This method is considered to be low-level and is called from another class where
             input validation and packing is done, but for testing it can be called directly
             with help of utility function "pack_threads(*args)" provided in this module
         """
-        # TODO: Check of works
-        pc_status_list = [ThreadState for _ in range(5)]
+        pc_thread_states = [ThreadState() for _ in range(5)]
         for thread in range(5):
             if threads & (1 << thread):  # Unpack threads from 5-bit integer representation
                 self._client.send_msg(f"PCSTATUS {thread + 1}:")
-                status = self._client.wait_recv(NEWLINE_MSG).decode().split("\r\n")[1:]   # Split by newlines
-                pc_status_list[thread].name = status[-2].split()[0]                       # Get program name
-                split = [" ".join(el.split()).split(": ") for el in status if ":" in el]  # Get lines like "key: value"
-                for key, value in split:
-                    if "PC status" in key:
-                        pc_status_list[thread].running = "not running" not in value
-                        continue
-                    pc_status_list[thread].__setattr__(key, value)
-        return pc_status_list
+                response = self._client.wait_recv(NEWLINE_MSG).decode()
+                pc_thread_states[thread] = self._parse_program_thread(response)
+        return pc_thread_states
 
-    def get_rcp_status(self) -> dict:
-        status = {}
+    def get_rcp_status(self) -> ThreadState:
+        """ Checks the status of current active RCP program.
+        Returns:
+            ThreadState: data object, representing the status of an active RCP program."""
         self._client.send_msg("STATUS")
-        if (result_msg := self._client.wait_recv(NEWLINE_MSG)) and len(result_msg) > 10:
-            response_list = result_msg.decode().split('\r\n')
-
-            for response_line in response_list:
-                if response_line.find(' mode') >= 0:
-                    status.update({"mode": response_line.split(' ')[0]})
-
-                if response_line.find('Stepper status:') >= 0:
-                    status.update({"program_status": ' '.join(response_line.split(' ')[2:]).strip()[:-1]})
-
-            if response_list[-2].find('No program is running.') >= 0:
-                status.update({"program_name": None})
-                status.update({"step_num": None})
-            else:
-                status.update({"program_name": ''.join(response_list[-2].split(' ')[1].strip())})
-                status.update({"step_num": response_list[-2].split()[2]})
-        return status
+        return self._parse_program_thread(self._client.wait_recv(NEWLINE_MSG).decode())
 
     def upload_program(self, program_string: str, proceed_on_error: bool = True) -> None:
         """ Uploads a program to the robot.
@@ -435,8 +423,14 @@ if __name__ == "__main__":
     PORT = 9105         # Port for K-Roset
 
     robot = KHITelnetLib(IP, PORT)
-    with open("../as_programs/large.as") as file:
+    with open("../as_programs/endless.pc") as file:
         file_string = file.read()
         robot.upload_program(file_string, proceed_on_error=True)
-        robot.delete_program("large")
+        robot.execute_pc("endless", 0)
+    robot.get_rcp_status()
+    robot.get_pc_status(63)
+    # with open("../as_programs/large.as") as file:
+    #     file_string = file.read()
+    #     robot.upload_program(file_string, proceed_on_error=True)
+    #     robot.delete_program("large")
     robot.close_connection()
