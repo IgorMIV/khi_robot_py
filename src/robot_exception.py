@@ -36,9 +36,43 @@ class KawaProgSyntaxError(Exception):
 
 class KawaProgNotExistError(ValueError):
     def __init__(self, program_name: str):
-        super().__init__(f"Program {program_name} does not exist in robot's memory")
+        super().__init__(f"Program {program_name} does not exist")
 
+
+class KawaProgAlreadyRunning(ValueError):
+    def __init__(self, program_name: str):
+        super().__init__(f"Program {program_name} is already running in another thread")
+
+
+class KawaProgStillLoaded(ValueError):
+    def __init__(self, program_name: str):
+        super().__init__(f"Program {program_name} is halted via abort, but still loaded. Use KILL or PCKILL")
+
+
+class KawaProgIsActive(ValueError):
+    def __init__(self, thread_num: int):
+        super().__init__(f"Program is running in thread {thread_num}. Use PCABORT or PCEND")
+
+
+class KawaThreadBusy(ValueError):
+    def __init__(self, thread_num: int):
+        super().__init__(f"Another program is running in thread {thread_num}")
 
 class KawaProgTransmissionError(Exception):
     def __init__(self, description: str):
         super().__init__(description)
+
+
+class KawaTeachModeON(Exception):
+    def __init__(self):
+        super().__init__("Cannot execute RCP program in TEACH mode")
+
+
+class KawaTeachLockON(Exception):
+    def __init__(self):
+        super().__init__("Cannot execute RCP program with teach lock on")
+
+
+class KawaMotorsPoweredOFF(Exception):
+    def __init__(self):
+        super().__init__("Cannot execute RCP program with motors powered off")
