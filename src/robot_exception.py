@@ -58,6 +58,7 @@ class KawaThreadBusy(ValueError):
     def __init__(self, thread_num: int):
         super().__init__(f"Another program is running in thread {thread_num}")
 
+
 class KawaProgTransmissionError(Exception):
     def __init__(self, description: str):
         super().__init__(description)

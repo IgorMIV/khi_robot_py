@@ -37,8 +37,6 @@ MOTORS_DISABLED = b"motor power is OFF."                    # Running RCP progra
 
 class KHITelnetLib:
     def __init__(self, ip: str, port: int):
-        self._ip_address = ip
-        self._port_number = port
         self._client = TCPSockClient(ip, port)
         self._connect()
 
@@ -60,15 +58,15 @@ class KHITelnetLib:
         self._client.send_msg("ERESET")
         self._client.wait_recv(NEWLINE_MSG)
 
-    def close_connection(self) -> None:
+    def disconnect(self) -> None:
         self._client.disconnect()
 
-    def get_system_switch_state(self, switch_name: str) -> bool:
+    def get_sys_switch(self, switch_name: str) -> bool:
         """ Sets robot system switch state """
         self._client.send_msg("SWITCH " + switch_name)
         return self._client.wait_recv(NEWLINE_MSG).split()[-2].decode() == "ON"
 
-    def set_system_switch_state(self, switch_name: str, value: bool) -> None:
+    def set_sys_switch(self, switch_name: str, value: bool) -> None:
         """ Sets robot system switch. Note that switch might be read-only,
             in that case switch value won't be changed """
         self._client.send_msg(switch_name + "ON" if value else "OFF")
@@ -130,13 +128,13 @@ class KHITelnetLib:
         self._client.send_msg("STATUS")
         return self._parse_program_thread(self._client.wait_recv(NEWLINE_MSG).decode())
 
-    def _init_loading(self):
+    def _init_loading(self) -> None:
         self._client.send_bytes(START_LOADING)
         res = self._client.wait_recv(b'Loading...(using.rcc)\r\n', SAVE_LOAD_ERROR)
         if SAVE_LOAD_ERROR in res:
             raise KawaProgTransmissionError("SAVE/LOAD in progress")  # TODO: Try to reset error
 
-    def _process_response(self):
+    def _process_response(self) -> bytes:
         errors = b""
         res = self._client.wait_recv(SYNTAX_ERROR, PROGRAM_IN_USE, PKG_RECV,
                                      NAME_CONFIRMATION, CONFIRM_TRANSMISSION)
@@ -155,10 +153,8 @@ class KHITelnetLib:
 
     def upload_program(self, program_string: str) -> None:
         """ Uploads a program to the robot.
-
         Args:
             program_string (str): Text of the program to upload.
-
         Raises:
             KawaProgSyntaxError: If there are syntax errors in the uploaded program.
             KawaProgAlreadyRunning: If program you're trying to upload is in use and not killed
@@ -238,6 +234,7 @@ class KHITelnetLib:
                     raise KawaProgIsActive(thread_num + 1)
 
     def rcp_execute(self, program_name: str):
+        """ Executes RCP program of set name """
         self._client.send_msg("EXECUTE " + program_name)
         res = self._client.wait_recv(NEWLINE_MSG)
 
@@ -253,10 +250,12 @@ class KHITelnetLib:
         self._client.wait_recv(PROGRAM_COMPLETED)
 
     def rcp_abort(self) -> None:
+        """ Aborts current RCP program """
         self._client.send_msg("ABORT")
         self._client.wait_recv(NEWLINE_MSG)
 
     def kill_rcp(self) -> None:
+        """ Kills current RCP program """
         self._client.send_msg("KILL")
         self._client.wait_recv(CONFIRMATION_REQUEST)
         self._client.send_msg("1")
@@ -297,4 +296,4 @@ if __name__ == "__main__":
         file_string = file.read()
         robot.upload_program(file_string)
 
-    robot.close_connection()
+    robot.disconnect()

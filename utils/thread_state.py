@@ -5,4 +5,3 @@ class ThreadState:
     step_num: int = -1
     completed_cycles: int = 0
     remaining_cycles: int = 0
-
