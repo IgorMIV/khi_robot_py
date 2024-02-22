@@ -15,7 +15,7 @@ with khirolib(IP, PORT, log=True) as robot:
                                       program_text=program_text)
         print("sent program ", i)
 
-    # result = robot.upload_program(filename="as_programs/endless.as")
+    # result = robot.upload_program(filename="as_programs/endless.pc")
     # result = robot.upload_program(filename="as_programs/endless_move.as")
     #
     # program_text = "var1 = 10\n" \

@@ -1,7 +1,7 @@
 import math
 from utils.thread_state import ThreadState
-from tcp_sock_client import TCPSockClient
-from robot_exception import *
+from src.tcp_sock_client import TCPSockClient
+from src.robot_exception import *
 
 # One package size in bytes for splitting large programs. Slightly faster at higher values
 # It's 2962 bytes in KIDE and robot is responding for up to 3064 bytes
@@ -35,7 +35,7 @@ PROG_IS_ACTIVE = b"Cannot KILL program that is running."    # Program is active 
 MOTORS_DISABLED = b"motor power is OFF."                    # Running RCP program with motors powered OFF
 
 
-def connect(client: TCPSockClient) -> None:
+def telnet_connect(client: TCPSockClient) -> None:
     try:
         client.wait_recv(b"login")              # Send 'as' as login for kawasaki telnet terminal
         client.send_msg("as")                   # Confirm with carriage return and line feed control symbols
