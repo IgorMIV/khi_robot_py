@@ -3,11 +3,7 @@ from src.khi_telnet_lib import *
 from libs.positionlib.positionlib import Position
 
 
-class MoveTo(IAction):
-    """ Online command to move robot to specified point via tcp/ip """
-    def __init__(self, point: Position, **kwargs):
-        super().__init__(**kwargs)
-        self._point = point
+""" Implements basic actions for Kawasaki robots using IAction interface """
 
 
 class LMove(IAction):
@@ -17,6 +13,9 @@ class LMove(IAction):
     def __init__(self, point: Position, **kwargs):
         super().__init__(**kwargs)
         self._point = point
+
+    def is_async(self) -> bool:
+        return True
 
     def execute(self, telnet_client: TCPSockClient):
         pass
@@ -32,6 +31,9 @@ class JMove(IAction):
     def __init__(self, point: Position, **kwargs):
         super().__init__(**kwargs)
         self._point = point
+
+    def is_async(self) -> bool:
+        return True
 
     def execute(self, telnet_client: TCPSockClient):
         pass
