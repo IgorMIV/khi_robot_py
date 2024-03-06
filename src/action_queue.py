@@ -1,14 +1,15 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from src.khi_telnet_lib import *
+from src.khi_telnet_lib import TCPSockClient
 from collections import deque
+from typing import Callable, Optional
 
 
 class ActionQueue(ABC):
-    instance_stack = deque()  # Stack to hold last active opened context
+    instance_stack = deque()
 
     def __init__(self):
-        self.action_queue = deque()
+        self.action_queue: deque[IAction] = deque()
 
     def __new__(cls, *args, **kwargs):
         """ On creation of object push itself to instance stack """
@@ -46,14 +47,14 @@ class IAction(ABC):
     _explicit_target: ActionQueue | None = None
     result = None
 
-    def __init__(self, max_time: int = 10, max_retries: int = 3):
+    def __init__(self, max_time: int = 10, max_retries: int = 3, result_callback: Optional[Callable] = None):
         self.max_time = max_time
         self.max_retries = max_retries
+        self._result_callback = result_callback
 
         target = self._explicit_target or ActionQueue.instance_stack[-1]
         if self.is_async or not hasattr(target, "execute_action"):
             target.action_queue.append(self)
-        result = "Hello world"
 
     def __new__(cls, *args, **kwargs):
         instance = super().__new__(cls)
@@ -70,6 +71,7 @@ class IAction(ABC):
         return IntermediateAction
 
     @property
+    @abstractmethod
     def is_async(self) -> bool:
         pass
 
@@ -80,3 +82,37 @@ class IAction(ABC):
     @abstractmethod
     def translate2as(self) -> str:
         pass
+
+
+if __name__ == "__main__":
+    class TestQueue(ActionQueue):
+        def close(self):
+            pass
+
+    class TestAction(IAction):
+        def __init__(self, name, **kwargs):
+            self.name = name
+            super().__init__(**kwargs)
+
+        def is_async(self) -> bool:
+            return True
+
+        def execute(self, telnet_client: TCPSockClient):
+            pass
+
+        def translate2as(self) -> str:
+            pass
+
+    with TestQueue() as q, TestQueue() as q2:
+        TestAction(1)
+        TestAction(2)
+        TestAction(3)
+
+        with TestQueue() as q1:
+            TestAction(1)
+            TestAction(2)
+            TestAction(3)
+
+        TestAction(1)
+        TestAction(2)
+        TestAction(3)

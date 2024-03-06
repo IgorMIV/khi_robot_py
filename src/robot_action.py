@@ -3,7 +3,7 @@ from src.khi_telnet_lib import *
 from libs.positionlib.positionlib import Position
 
 
-""" Implements basic actions for Kawasaki robots using IAction interface """
+""" Implementations of basic actions for Kawasaki robots using IAction interface """
 
 
 class LMove(IAction):

@@ -1,11 +1,15 @@
 import threading
 import time
 from src.action_queue import *
+from src.khi_telnet_lib import telnet_connect
 from utils.time_limit import time_limit
 from src.robot_action import LMove, JMove
 from libs.positionlib.positionlib import Position
 
+
 TCPIP_COMM_PORT = 2000
+TELNET_DEF_PORT = 23
+TELNET_SIM_PORT = 9105
 
 
 class KHIRobot(ActionQueue, threading.Thread):
@@ -25,12 +29,12 @@ class KHIRobot(ActionQueue, threading.Thread):
         threading.Thread.__init__(self)
 
         self._ip = ip
-        self._telnet_port = 23 if is_real_robot else 9105
+        self._telnet_port = TELNET_DEF_PORT if is_real_robot else TELNET_SIM_PORT
         self._tcpip_port = TCPIP_COMM_PORT
 
         self._stopped = threading.Event()
-        self._is_real_robot = is_real_robot
-        self._online_mode = online_mode
+        self._is_real_robot: bool = is_real_robot
+        self._online_mode: bool = online_mode
 
         self._telnet_client: TCPSockClient | None = None
         self._tcpip_client: TCPSockClient | None = None
@@ -73,25 +77,49 @@ class KHIRobot(ActionQueue, threading.Thread):
 
 
 class KHIProgram(ActionQueue):
-    pass
+    def __init__(self, name: str):
+        self.name = name
+        super(KHIProgram, self).__init__()
+
+    def translate_to_as(self) -> str:
+        commands = [f".PROGRAM {self.name}()"]
+        for action in self.action_queue:
+            commands.append(action.translate2as())
+        commands.append(".END")
+        return "\n".join(commands)
+
+    def close(self):
+        pass
 
 
 if __name__ == "__main__":
-    queue_list = [ActionQueue(), ActionQueue(), ActionQueue()]
+    pg_list = [KHIProgram(str(name)) for name in range(5)]
 
-    for queue in queue_list:
-        with queue:
+    for pg in pg_list:
+        with pg:
             LMove(Position())
             LMove(Position())
             LMove(Position())
+        print(pg.translate_to_as())
 
-    exit(0)
+    with KHIProgram("test1") as robot1, KHIProgram("test2") as robot2:
 
-    with KHIRobot("127.0.0.1") as robot1, KHIRobot("127.0.0.1") as robot2:
+        LMove[robot1](Position())
+        LMove[robot1](Position())
+        LMove[robot1](Position())
 
-        LMove(Position())
-        LMove(Position())
-        LMove(Position())
-        LMove(Position())
+        LMove[robot2](Position())
+        LMove[robot2](Position())
+        LMove[robot2](Position())
+
+        print(robot1.translate_to_as())
+        print(robot2.translate_to_as())
 
 
+
+    # with KHIRobot("127.0.0.1") as robot1, KHIRobot("127.0.0.1") as robot2:
+    #
+    #     LMove(Position())
+    #     LMove(Position())
+    #     LMove(Position())
+    #     LMove(Position())
