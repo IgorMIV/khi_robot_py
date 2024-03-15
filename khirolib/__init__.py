@@ -22,7 +22,7 @@ class KHIRobot(ActionQueue, threading.Thread):
         is_real_robot (bool, optional): Indicates whether the robot is real or simulated.
                                         TCP/IP communication doesn't work in KRoset simulation program.
                                         Defaults to False.
-        online_mode (bool, optional): Indicates whether the robot is in online mode. Defaults to False.
+        online_mode (bool, optional): Sets control mode of the robot. Defaults to False.
     """
     def __init__(self, ip: str, is_real_robot: bool = False, online_mode: bool = False):
         super(KHIRobot, self).__init__()

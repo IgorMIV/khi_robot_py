@@ -6,21 +6,21 @@ from typing import Callable, Optional
 
 
 class ActionQueue(ABC):
-    instance_stack = deque()
+    instance_stack: deque[ActionQueue] = deque()
 
     def __init__(self):
         self.action_queue: deque[IAction] = deque()
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs) -> ActionQueue:
         """ On creation of object push itself to instance stack """
         cls.instance_stack.append(super().__new__(cls))
         return cls.instance_stack[-1]
 
-    def enter_context(self):
+    def enter_context(self) -> None:
         if self.instance_stack[-1] is not self:
             self.instance_stack.append(self)
 
-    def exit_context(self):
+    def exit_context(self) -> None:
         if not (self.instance_stack[-1] is self):
             raise Exception("You're trying to exit ActionQueue context that isn't active")
         self.instance_stack.pop()
@@ -53,14 +53,15 @@ class IAction(ABC):
         self._result_callback = result_callback
 
         target = self._explicit_target or ActionQueue.instance_stack[-1]
-        if self.is_async or not hasattr(target, "execute_action"):
-            target.action_queue.append(self)
+        if not self.is_async and hasattr(target, "execute_action"):
+            target.execute_action(self)
+        else:
+            target.action_queue.append(self)   # If action is async or target can't execute actions
 
     def __new__(cls, *args, **kwargs):
-        instance = super().__new__(cls)
-        if instance.is_async:  # Go to __init__ normally and add to queue
+        instance = super().__new__(cls)  # Construct object normally
+        if instance.is_async:            # If is async (no data needs to be returned immediately), init normally
             return instance
-
         instance.__init__(*args, **kwargs)
         return instance.result
 
