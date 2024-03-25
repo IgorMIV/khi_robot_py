@@ -13,24 +13,50 @@ SERVER_TIMEOUT = 10
 
 
 class TCPSockClient:
-    def __init__(self, ip: str, port: int):
-        self._robot_ip = ip                                               # IP address of the robot.
-        self._robot_port = port                                           # port number of the robot.
+    def __init__(self, ip: str, port: int, timeout: int | None = None):
+        """
+        Initialize TCPSockClient instance.
 
-        self._client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # Socket object for the Telnet connection.
-        self._client.settimeout(SERVER_TIMEOUT)                           # Set time limit for connecting to robot
-        self._client.connect((self._robot_ip, self._robot_port))
+        Args:
+            ip (str): IP address of the robot.
+            port (int): Port number of the robot.
+            timeout (int | None, optional): Connection timeout value in seconds. Defaults to None.
+        """
+        self._ip: str = ip                                               # IP address of the robot.
+        self._port: int = port                                           # port number of the robot.
+
+        self._client: socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._client.settimeout(SERVER_TIMEOUT if timeout is None else timeout)
+        self._client.connect((self._ip, self._port))
 
     def send_msg(self, msg: str, end: bytes = b'\n') -> None:
+        """ Send a message to the robot.
+        Args:
+            msg (str): Message to be sent.
+            end (bytes, optional): End marker for the message. Defaults to b'\n'.
+        """
         # print("sent:", msg)
         self._client.sendall(msg.encode() + end)
 
     def send_bytes(self, msg: bytes) -> None:
+        """ Send bytes to the robot.
+        Args:
+            msg (bytes): Bytes to be sent.
+        """
         # print("sent:", msg)
         self._client.sendall(msg)
 
-    def wait_recv(self, *ends: b'') -> bytes:
-        """ Waits to receive data from the robot until one of the specified end markers is encountered """
+    def wait_recv(self, *ends: bytes) -> bytes:
+        """ Wait to receive data from the robot until one of the specified end markers is encountered.
+        Args:
+            *ends (bytes): End markers to wait for.
+
+        Returns:
+            bytes: Received data.
+
+        Raises:
+            TimeoutError: If receive operation times out.
+        """
         incoming = b""
         try:
             while True:
@@ -43,4 +69,5 @@ class TCPSockClient:
             raise TimeoutError
 
     def disconnect(self) -> None:
+        """ Closes connection """
         self._client.close()
