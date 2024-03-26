@@ -1,32 +1,39 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from src.khi_telnet_lib import TCPSockClient
 from collections import deque
 from typing import Callable, Optional
+from src.khi_telnet_lib import TCPSockClient
 
 
 class ActionQueue(ABC):
-    instance_stack: deque[ActionQueue] = deque()
+    _instance_stack: deque[ActionQueue] = deque()
 
     def __init__(self):
-        self.action_queue: deque[IAction] = deque()
+        self._action_queue: deque[IAction] = deque()
 
     def __new__(cls, *args, **kwargs) -> ActionQueue:
         """ On creation of object push itself to instance stack """
-        cls.instance_stack.append(super().__new__(cls))
-        return cls.instance_stack[-1]
+        cls._instance_stack.append(super().__new__(cls))
+        return cls._instance_stack[-1]
+
+    @classmethod
+    def get_active_scope(cls) -> ActionQueue:
+        return cls._instance_stack[-1]
+
+    def register_action(self, action: IAction) -> None:
+        self._action_queue.append(action)
 
     def enter_context(self) -> None:
-        if self.instance_stack[-1] is not self:
-            self.instance_stack.append(self)
+        if self._instance_stack[-1] is not self:
+            self._instance_stack.append(self)
 
     def exit_context(self) -> None:
-        if not (self.instance_stack[-1] is self):
+        if not (self._instance_stack[-1] is self):
             raise Exception("You're trying to exit ActionQueue context that isn't active")
-        self.instance_stack.pop()
+        self._instance_stack.pop()
 
     def __enter__(self):
-        if self in self.instance_stack:
+        if self in self._instance_stack:
             self.enter_context()
         return self
 
@@ -52,11 +59,11 @@ class IAction(ABC):
         self.max_retries = max_retries
         self._result_callback = result_callback
 
-        target = self._explicit_target or ActionQueue.instance_stack[-1]
+        target = self._explicit_target or ActionQueue.get_active_scope()
         if not self.is_async and hasattr(target, "execute_action"):
             target.execute_action(self)
         else:
-            target.action_queue.append(self)   # If action is async or target can't execute actions
+            target.register_action(self)   # If action is async or target can't execute actions
 
     def __new__(cls, *args, **kwargs):
         instance = super().__new__(cls)  # Construct object normally
