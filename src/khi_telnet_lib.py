@@ -1,7 +1,7 @@
 import math
 from utils.thread_state import ThreadState
 from src.tcp_sock_client import TCPSockClient
-from src.robot_exception import *
+from src.khi_exception import *
 
 # One package size in bytes for splitting large programs. Slightly faster at higher values
 # It's 2962 bytes in KIDE and robot is responding for up to 3064 bytes
@@ -12,27 +12,27 @@ NEWLINE_MSG = b"\x0d\x0a\x3e"                      # "\r\n>" - Message when clea
 
 """ Service byte sequences for various steps of loading program via telnet connection """
 START_LOADING = b"LOAD using.rcc\r\n" + b"\x02\x41\x20\x20\x20\x20\x30\x17"
-SAVE_LOAD_ERROR = b"\x65\x73\x73\x2e\x0d\x0a\x3e"           # Previous save/load operation didn't end
-START_UPLOAD_SEQ = b"\x02\x43\x20\x20\x20\x20\x30"          # Suffix for a data batch
-END_UPLOAD_SEQ = b"\x17"                                    # Postfix for a data batch
-CANCEL_LOADING = b"\x1a\x17\x02\x45\x20\x20\x20\x20\x30"    # Message to indicate last data batch
-PKG_RECV = b"\x05\x02\x43\x17"                              # Byte sequence when program batch is accepted
-CONFIRM_TRANSMISSION = b"\x73\x29\x0d\x0a\x3e"              # Message from robot confirming transmission
-NAME_CONFIRMATION = b"()\r\n"
+SAVE_LOAD_ERROR = b"\x65\x73\x73\x2e\x0d\x0a\x3e"                 # Previous save/load operation didn't end
+START_UPLOAD_SEQ = b"\x02\x43\x20\x20\x20\x20\x30"                # Suffix for a data batch
+END_UPLOAD_SEQ = b"\x17"                                          # Postfix for a data batch
+CANCEL_LOADING = b"\x0d\x0a\x1a\x17\x02\x45\x20\x20\x20\x20\x30"  # Message to indicate last data batch
+PKG_RECV = b"\x05\x02\x43\x17"                                    # Byte sequence when program batch is accepted
+CONFIRM_TRANSMISSION = b"\x73\x29\x0d\x0a\x3e"                    # Message from robot confirming transmission
+NAME_CONFIRMATION = b"\x26\x29\x0d\x0a"                           # ()\r\n
 
 """ Status and Error messages """
-CONFIRMATION_REQUEST = b'\x30\x29\x20'                      # Are you sure ? (Yes:1, No:0)?
+CONFIRMATION_REQUEST = b'\x30\x29\x20'                            # Are you sure ? (Yes:1, No:0)?
 PROGRAM_COMPLETED = b"Program completed.No = 1"
 
 SYNTAX_ERROR = b"\r\nSTEP syntax error.\r\n(0:Change to comment and continue, 1:Delete program and abort)\r\n"
-TEACH_MODE_ON = b"program in TEACH mode."                   # Running RCP program in teach mode
-TEACH_LOCK_ON = b"teach lock is ON."                        # Running RCP program when pendant teach lock is on
-PROGRAM_IN_USE = b"program already in use."                 # Program is already running in different thread
-PROG_IS_LOADED = b"KILL or PCKILL to delete program."       # Program is halted via pcabort. Use KILL pr PCKILL
-THREAD_IS_BUSY = b"PC program is running."                  # Another program is running in this thread
-PROG_NOT_EXIST = b"Program does not exist."                 # Program does not exist error
-PROG_IS_ACTIVE = b"Cannot KILL program that is running."    # Program is active and can't be killed
-MOTORS_DISABLED = b"motor power is OFF."                    # Running RCP program with motors powered OFF
+TEACH_MODE_ON = b"program in TEACH mode."                         # Running RCP program in teach mode
+TEACH_LOCK_ON = b"teach lock is ON."                              # Running RCP program when pendant teach lock is on
+PROGRAM_IN_USE = b"program already in use."                       # Program is already running in different thread
+PROG_IS_LOADED = b"KILL or PCKILL to delete program."             # Program is halted via pcabort. Use KILL pr PCKILL
+THREAD_IS_BUSY = b"PC program is running."                        # Another program is running in this thread
+PROG_NOT_EXIST = b"Program does not exist."                       # Program does not exist error
+PROG_IS_ACTIVE = b"Cannot KILL program that is running."          # Program is active and can't be killed
+MOTORS_DISABLED = b"motor power is OFF."                          # Running RCP program with motors powered OFF
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -41,14 +41,14 @@ def telnet_connect(client: TCPSockClient) -> None:
         client.send_msg("as")                   # Confirm with carriage return and line feed control symbols
         client.wait_recv(NEWLINE_MSG)           # wait for '>' symbol of a kawasaki terminal new line
     except (TimeoutError, ConnectionRefusedError):
-        raise KawaConnError()
+        raise KHIConnError()
 
 
 def handshake(client: TCPSockClient) -> None:
     """ Performs a handshake with the robot and raises an exception if something fails """
     client.send_msg("")                         # Send empty command
     if not client.wait_recv(NEWLINE_MSG):       # Wait for newline symbol
-        raise KawaConnError()
+        raise KHIConnError()
 
 
 def ereset(client: TCPSockClient) -> None:
@@ -137,7 +137,7 @@ def init_loading(client: TCPSockClient) -> None:
     client.send_bytes(START_LOADING)
     res = client.wait_recv(b'Loading...(using.rcc)\r\n', SAVE_LOAD_ERROR)
     if SAVE_LOAD_ERROR in res:
-        raise KawaProgTransmissionError("SAVE/LOAD in progress")  # TODO: Try to reset error
+        raise KHIProgTransmissionError("SAVE/LOAD in progress")  # TODO: Try to reset error
 
 
 def process_response(client: TCPSockClient) -> bytes:
@@ -153,22 +153,21 @@ def process_response(client: TCPSockClient) -> bytes:
         res = client.wait_recv(PKG_RECV, SYNTAX_ERROR, CONFIRM_TRANSMISSION)
 
     if PROGRAM_IN_USE in res:
-        raise KawaProgAlreadyRunning("")
+        raise KHIProgRunningError("")
     return errors
 
 
-def upload_program(client: TCPSockClient, program_string: str) -> None:
+def upload_program(client: TCPSockClient, program_bytes: bytes) -> None:
     """ Uploads a program to the robot.
     Args:
         client(TCPSockClient): Object representing open client socket
-        program_string (str): Text of the program to upload.
+        program_bytes (bytes): Binary representation of program to upload.
     Raises:
         KawaProgSyntaxError: If there are syntax errors in the uploaded program.
-        KawaProgAlreadyRunning: If program you're trying to upload is in use and not killed
+        KawaProgRunningError: If program you're trying to upload is in use and not killed
     Returns:
         None
     """
-    program_bytes = bytes(program_string, "utf-8")
     num_packages = math.ceil(len(program_bytes) / UPLOAD_BATCH_SIZE)
     file_packages = [program_bytes[idx * UPLOAD_BATCH_SIZE: (idx + 1) * UPLOAD_BATCH_SIZE]
                      for idx in range(num_packages)] + [CANCEL_LOADING]
@@ -181,7 +180,7 @@ def upload_program(client: TCPSockClient, program_string: str) -> None:
         errors += process_response(client)
 
     if errors:
-        raise KawaProgSyntaxError(errors.split(SYNTAX_ERROR))
+        raise KHIProgSyntaxError(errors.split(SYNTAX_ERROR))
 
 
 def delete_program(client: TCPSockClient, program_name: str) -> None:
@@ -190,9 +189,9 @@ def delete_program(client: TCPSockClient, program_name: str) -> None:
     client.send_msg("1")
     res = client.wait_recv(b"1" + NEWLINE_MSG)
     if PROGRAM_IN_USE in res:
-        raise KawaProgAlreadyRunning(program_name)
+        raise KHIProgRunningError(program_name)
     elif PROG_IS_LOADED in res:
-        raise KawaProgStillLoaded(program_name)
+        raise KHIProgLoadedError(program_name)
 
 
 def pc_execute(client: TCPSockClient, program_name: str, thread_num: int) -> None:
@@ -209,11 +208,11 @@ def pc_execute(client: TCPSockClient, program_name: str, thread_num: int) -> Non
     res = client.wait_recv(NEWLINE_MSG)
 
     if PROG_NOT_EXIST in res:
-        raise KawaProgNotExistError(program_name)
+        raise KHIProgNotExistError(program_name)
     elif PROGRAM_IN_USE in res:
-        raise KawaProgAlreadyRunning(program_name)
+        raise KHIProgRunningError(program_name)
     elif THREAD_IS_BUSY in res:
-        raise KawaThreadBusy(thread_num)
+        raise KHIThreadBusyError(thread_num)
 
 
 def pc_abort(client: TCPSockClient, threads: int) -> None:
@@ -244,7 +243,7 @@ def pc_kill(client: TCPSockClient, threads: int) -> None:
             client.send_msg("1\n")
             res = client.wait_recv(NEWLINE_MSG)
             if PROG_IS_ACTIVE in res:
-                raise KawaProgIsActive(thread_num + 1)
+                raise KHIProgActiveError(thread_num + 1)
 
 
 def rcp_execute(client: TCPSockClient, program_name: str):
@@ -253,13 +252,13 @@ def rcp_execute(client: TCPSockClient, program_name: str):
     res = client.wait_recv(NEWLINE_MSG)
 
     if PROG_NOT_EXIST in res:
-        raise KawaProgNotExistError(program_name)
+        raise KHIProgNotExistError(program_name)
     elif TEACH_MODE_ON in res:
-        raise KawaTeachModeON
+        raise KHITeachModeError
     elif TEACH_LOCK_ON in res:
-        raise KawaTeachLockON
+        raise KHITeachLockError
     elif MOTORS_DISABLED in res:
-        raise KawaMotorsPoweredOFF
+        raise KHIMotorsOffError
 
     client.wait_recv(PROGRAM_COMPLETED)
 
