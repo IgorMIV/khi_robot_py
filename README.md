@@ -48,7 +48,7 @@ from khirolib import *
 robot = khirolib(IP, PORT, connection_mode='single')
 
 # Upload program from file:
-robot.upload_program(filename="as_programs/endless.as")
+robot.upload_program(filename="as_programs/endless.pc")
 robot.upload_program(filename="as_programs/endless_move.as")
 
 # Upload program from string:
