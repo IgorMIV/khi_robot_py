@@ -1,5 +1,6 @@
 import math
 from utils.thread_state import ThreadState
+from utils.rcp_state import RCPState
 from src.tcp_sock_client import TCPSockClient
 from src.khi_exception import *
 
@@ -33,6 +34,7 @@ THREAD_IS_BUSY = b"PC program is running."                        # Another prog
 PROG_NOT_EXIST = b"Program does not exist."                       # Program does not exist error
 PROG_IS_ACTIVE = b"Cannot KILL program that is running."          # Program is active and can't be killed
 MOTORS_DISABLED = b"motor power is OFF."                          # Running RCP program with motors powered OFF
+RCP_IS_RUNNING = b"Robot control program is already running."     # Program is running and can't be deleted
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -82,21 +84,66 @@ def get_error_descr(client: TCPSockClient) -> str:
     return ""
 
 
-def parse_program_thread(robot_msg: str) -> ThreadState:
-    if "Program is not running" not in robot_msg:
-        res = ThreadState()
-        lines = robot_msg.split("\r\n")[1:-1]
-        res.running = True
-        res.name = lines[-1].split()[0]
-        res.step_num = lines[-1].split()[2]
-        for line in lines:
-            if "Completed cycles: " in line:
-                res.completed_cycles = int(line.split()[-1])
-            elif "Remaining cycles: " in line:
-                res.remaining_cycles = -1 if "Infinite" in line else int(line.split()[-1])
-                break  # Because remaining cycles number always last
-        return res
-    return ThreadState()
+def parse_program_thread(robot_msg: str, thread_num: int) -> ThreadState:
+    res = ThreadState()
+    lines = robot_msg.split("\r\n")[1:-1]
+    res.thread_num = thread_num
+    res.running = True
+    res.name = lines[-1].split()[0]
+    res.step_num = lines[-1].split()[2]
+    for line in lines:
+        if "Program is not running." in line:
+            res.running = False
+        elif "Completed cycles: " in line:
+            res.completed_cycles = int(line.split()[-1])
+        elif "Remaining cycles: " in line:
+            res.remaining_cycles = -1 if "Infinite" in line else int(line.split()[-1])
+            # break  # Because remaining cycles number always last
+        elif "No program is running." in line:
+            res.name = ""
+            res.step_num = -1
+            break
+    return res
+
+
+def parse_program_rcp(robot_msg: str) -> ThreadState:
+    res = RCPState()
+    lines = robot_msg.split("\r\n")[1:-1]
+    res.thread_num = 0
+    res.running = False
+    res.name = lines[-1].split()[0]
+    res.step_num = lines[-1].split()[2]
+
+    # for element in lines:
+    #     print("!!!!", element)
+
+    for line in lines:
+        if "Motor power " in line:
+            # because if motor is ON - STATUS message isn't consist this state - default True
+            if line.split()[-1] == 'OFF':
+                res.motor_on = False
+        elif "TEACH mode" in line:
+            res.repeat_mode = False
+        elif "REPEAT mode" in line:
+            res.repeat_mode = True
+            if "CYCLE START ON" in line:
+                res.running = True
+        elif "Monitor speed(%) " in line:
+            res.monitor_speed = float(line.split()[-1])
+        elif "Program speed(%) " in line:
+            res.program_speed = float(line.split()[-1])  # check it - because in consist 2-nd value - line.split()[-2]
+        elif "ALWAYS Accu.[mm] " in line:
+            res.accuracy = float(line.split()[-1])
+        # elif "Program is not running." in line: # It looks only while moving
+        #     res.running = False
+        elif "Completed cycles: " in line:
+            res.completed_cycles = int(line.split()[-1])
+        elif "Remaining cycles: " in line:
+            res.remaining_cycles = -1 if "Infinite" in line else int(line.split()[-1])
+        elif "No program is running." in line:
+            res.name = ""
+            res.step_num = -1
+    return res
 
 
 def get_pc_status(client: TCPSockClient, threads: int) -> [ThreadState]:
@@ -121,7 +168,7 @@ def get_pc_status(client: TCPSockClient, threads: int) -> [ThreadState]:
         if threads & (1 << thread_num):  # Unpack threads from 5-bit integer representation
             client.send_msg(f"PCSTATUS {thread_num + 1}:")
             response = client.wait_recv(NEWLINE_MSG).decode()
-            pc_thread_states[thread_num] = parse_program_thread(response)
+            pc_thread_states[thread_num] = parse_program_thread(response, thread_num=thread_num+1)
     return pc_thread_states
 
 
@@ -130,7 +177,7 @@ def get_rcp_status(client: TCPSockClient) -> ThreadState:
     Returns:
         ThreadState: data object, representing the status of an active RCP program."""
     client.send_msg("STATUS")
-    return parse_program_thread(client.wait_recv(NEWLINE_MSG).decode())
+    return parse_program_rcp(client.wait_recv(NEWLINE_MSG).decode())
 
 
 def init_loading(client: TCPSockClient) -> None:
@@ -246,7 +293,16 @@ def pc_kill(client: TCPSockClient, threads: int) -> None:
                 raise KHIProgActiveError(thread_num + 1)
 
 
-def rcp_execute(client: TCPSockClient, program_name: str):
+def rcp_prepare(client: TCPSockClient, program_name: str):
+    """ Prepare RCP program for execution (open on Teach pendant) """
+    client.send_msg("PRIME " + program_name)
+    res = client.wait_recv(NEWLINE_MSG)
+
+    if PROG_NOT_EXIST in res:
+        raise KHIProgNotExistError(program_name)
+
+
+def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
     """ Executes RCP program of set name """
     client.send_msg("EXECUTE " + program_name)
     res = client.wait_recv(NEWLINE_MSG)
@@ -260,12 +316,19 @@ def rcp_execute(client: TCPSockClient, program_name: str):
     elif MOTORS_DISABLED in res:
         raise KHIMotorsOffError
 
-    client.wait_recv(PROGRAM_COMPLETED)
+    if blocking:
+        client.wait_recv(PROGRAM_COMPLETED)
 
 
 def rcp_abort(client: TCPSockClient) -> None:
     """ Aborts current RCP program """
     client.send_msg("ABORT")
+    client.wait_recv(NEWLINE_MSG)
+
+
+def rcp_hold(client: TCPSockClient) -> None:
+    """ Aborts current RCP program """
+    client.send_msg("HOLD")
     client.wait_recv(NEWLINE_MSG)
 
 
@@ -285,12 +348,29 @@ def read_variable_real(client: TCPSockClient, variable_name: str) -> float:
 
 
 def read_programs_list(client: TCPSockClient) -> [str]:
+    # DEV check this function for long size pg lists
+    handshake(client)
     client.send_msg("DIRECTORY/P")
-    res = client.wait_recv(NEWLINE_MSG).decode().split("\n\r")
+    res = client.wait_recv(NEWLINE_MSG).decode().split("\r\n")
     if len(res) > 3:
         pg_list_str = res[2]
         pg_list = [item.strip() for item in pg_list_str.split() if item.strip() != ""]
         return pg_list
+    else:
+        return []
+
+
+def pg_delete(client: TCPSockClient, program_name):
+    client.send_msg(f"DELETE/D {program_name}")
+    client.wait_recv(CONFIRMATION_REQUEST)
+    client.send_msg("1\n")
+    res = client.wait_recv(NEWLINE_MSG)
+
+    if RCP_IS_RUNNING in res:
+        raise KHIProgRunningError(program_name)
+    elif PROG_IS_LOADED in res:
+        raise KHIProgLoadedError(program_name)
+
 
 
 def reset_save_load(client: TCPSockClient):

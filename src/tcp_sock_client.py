@@ -61,11 +61,12 @@ class TCPSockClient:
         try:
             while True:
                 incoming += self._client.recv(1)  # Receive symbols one-by-one from socket
+                # print("INC", incoming)
                 for eom in ends:
                     if incoming.find(eom) > -1:  # Wait eom message from robot
                         # print("received:", incoming)
                         return incoming
-        except socket.timeout:
+        except socket.timeout:  # Off timeout while waiting program complete message
             raise TimeoutError
 
     def disconnect(self) -> None:

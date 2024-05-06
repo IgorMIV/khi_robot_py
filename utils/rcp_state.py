@@ -1,7 +1,11 @@
-class ThreadState:
+class RCPState:
     """ Stores state of running pc or rcp thread on Kawasaki robot """
-    thread_num: int = None
     name: str = ""
+    motor_on: bool = True  # because if motor is ON - STATUS message isn't consist this state
+    repeat_mode: bool = None
+    monitor_speed: float = None
+    program_speed: float = None
+    accuracy: float = None
     running: bool = False
     step_num: int = -1
     completed_cycles: int = 0
@@ -19,8 +23,12 @@ class ThreadState:
         return self.running
 
     def __str__(self):
-        ans = "Thread number: " + str(self.thread_num) + "\n" + \
-              "Name: " + self.name + "\n" + \
+        ans = "RCP name: " + self.name + "\n" + \
+              "Motor ON: " + str(self.motor_on) + "\n" + \
+              "Repeat mode: " + str(self.repeat_mode) + "\n" + \
+              "Monitor speed: " + str(self.monitor_speed) + "\n" + \
+              "Program speed: " + str(self.program_speed) + "\n" + \
+              "Accuracy: " + str(self.accuracy) + "\n" + \
               "Running: " + str(self.running) + "\n" + \
               "Step num: " + str(self.step_num) + "\n" + \
               "Completed cycles: " + str(self.completed_cycles) + "\n" + \

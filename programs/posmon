@@ -1,0 +1,79 @@
+  port = 22800
+  buf_size = 5
+  tout_open = 60
+  tout_rec = 60
+  er_count = 0
+  ;PCEXECUTE 2: get_position.pc, -1
+listen:
+  TCP_LISTEN retl, port
+  IF retl < 0 THEN
+    ;IF er_count >= 5 THEN
+    ;  PRINT "Connection with PC is failed (LISTEN). Program is stopped."
+    ;  sock_id = -1
+    ;  ;GOTO exit
+    ;ELSE
+    er_count = er_count + 1
+    PRINT "TCP_LISTEN error=", retl, " error count=", er_count
+    GOTO listen
+    ;END
+  ELSE
+    PRINT "TCP_LISTEN OK ", retl
+  END
+  er_count1 = 0
+accept:
+  TCP_ACCEPT sock_id, port, tout_open, ip[1]
+  IF sock_id < 0 THEN
+    IF er_count1 >= 5 THEN
+      PRINT "Connection with PC is failed (ACCEPT). Program is stopped."
+      TCP_END_LISTEN ret, port
+      sock_id = -1
+    ELSE
+      er_count1 = er_count1 + 1
+      PRINT "TCP_ACCEPT error id=", sock_id, " error count=", er_count1
+      GOTO accept
+    END
+  ELSE
+    PRINT "TCP_ACCEPT OK id=", sock_id
+    PCEXECUTE 2: get_position.pc, -1
+    TWAIT 0.5
+  END
+send:
+  index = 0
+  $str_send[0] = ""
+  okay = 0
+  WHILE index != buf_size DO
+    $str_send[index] = $info
+    index = index + 1
+  END
+  buf_n = buf_size
+  .ret = 1
+  TCP_SEND sret, sock_id, $str_send[0], buf_n, 60
+  IF sret < 0 THEN
+    .ret = -1
+    PRINT "TCP_SEND error in SEND", sret
+    TCP_CLOSE ret, sock_id
+    TCP_END_LISTEN ret, port
+    PCABORT 2:
+    GOTO listen
+  ELSE
+    GOTO send
+  END
+  TCP_CLOSE ret, sock_id
+  ;Normal socket closure
+  IF ret < 0 THEN
+    PRINT "TCP_CLOSE error ERROE = (", ret, " ) ", $ERROR (ret)
+    TCP_CLOSE ret1, sock_id
+    ;Forced closure of socket (shutdown)
+    IF ret1 < 0 THEN
+      PRINT "TCP_CLOSE error id=", sock_id
+    END
+  ELSE
+    PRINT "TCP_CLOSE OK id=", sock_id
+  END
+  TCP_END_LISTEN ret, port
+  IF ret < 0 THEN
+    PRINT "TCP_CLOSE error id=", sock_id
+  ELSE
+    PRINT "TCP_CLOSE OK id=", sock_id
+  END
+  PCABORT 2:
