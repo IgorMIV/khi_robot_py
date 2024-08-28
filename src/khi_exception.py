@@ -55,6 +55,12 @@ class KHIProgNotExistError(ValueError):
         super().__init__(f"Program {program_name} does not exist")
 
 
+class KHIVarNotDefinedError(ValueError):
+    """ Raised when variable in program is not defined """
+    def __init__(self):
+        super().__init__(f"Variable is not defined")
+
+
 class KHIProgRunningError(ValueError):
     """ Raised when trying to upload / delete / execute program that is already running in another thread """
     def __init__(self, program_name: str):
@@ -101,3 +107,10 @@ class KHIMotorsOffError(Exception):
     """ Raised when executing motion command with motors powered OFF """
     def __init__(self):
         super().__init__("Cannot execute motion instructions with motors powered off")
+
+
+class KHIEResetError(Exception):
+    """ Raised when executing motion command with motors powered OFF """
+    def __init__(self):
+        super().__init__("Cannot execute because in error now.")
+

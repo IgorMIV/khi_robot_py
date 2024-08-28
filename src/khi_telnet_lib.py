@@ -24,8 +24,11 @@ NAME_CONFIRMATION = b"\x26\x29\x0d\x0a"                           # ()\r\n
 """ Status and Error messages """
 CONFIRMATION_REQUEST = b'\x30\x29\x20'                            # Are you sure ? (Yes:1, No:0)?
 PROGRAM_COMPLETED = b"Program completed.No = 1"
+PROGRAM_ABORTED = b"Program aborted.No = 1"
+PROGRAM_STOPPED = b"No = 1"                                       # Just finished or stopped
 
 SYNTAX_ERROR = b"\r\nSTEP syntax error.\r\n(0:Change to comment and continue, 1:Delete program and abort)\r\n"
+VARIABLE_NOT_DEFINED = b"(E0102) Variable is not defined."
 TEACH_MODE_ON = b"program in TEACH mode."                         # Running RCP program in teach mode
 TEACH_LOCK_ON = b"teach lock is ON."                              # Running RCP program when pendant teach lock is on
 PROGRAM_IN_USE = b"program already in use."                       # Program is already running in different thread
@@ -35,6 +38,7 @@ PROG_NOT_EXIST = b"Program does not exist."                       # Program does
 PROG_IS_ACTIVE = b"Cannot KILL program that is running."          # Program is active and can't be killed
 MOTORS_DISABLED = b"motor power is OFF."                          # Running RCP program with motors powered OFF
 RCP_IS_RUNNING = b"Robot control program is already running."     # Program is running and can't be deleted
+ERROR_NOW = b"(P1013)Cannot execute because in error now. Reset error.\r\n>"
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -315,9 +319,26 @@ def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
         raise KHITeachLockError
     elif MOTORS_DISABLED in res:
         raise KHIMotorsOffError
+    elif VARIABLE_NOT_DEFINED in res:
+        raise KHIVarNotDefinedError
+    elif ERROR_NOW in res:
+        raise KHIEResetError
 
     if blocking:
-        client.wait_recv(PROGRAM_COMPLETED)
+        res = client.wait_recv(PROGRAM_STOPPED)
+        if VARIABLE_NOT_DEFINED in res:
+            raise KHIVarNotDefinedError
+        elif PROGRAM_COMPLETED in res:
+            return
+        # client.wait_recv(PROGRAM_COMPLETED)
+
+
+def rcp_prime(client: TCPSockClient, program_name: str, blocking=True):
+    client.send_msg("PRIME " + program_name)
+    res = client.wait_recv(NEWLINE_MSG)
+
+    if PROG_NOT_EXIST in res:
+        raise KHIProgNotExistError(program_name)
 
 
 def rcp_abort(client: TCPSockClient) -> None:
@@ -370,7 +391,6 @@ def pg_delete(client: TCPSockClient, program_name):
         raise KHIProgRunningError(program_name)
     elif PROG_IS_LOADED in res:
         raise KHIProgLoadedError(program_name)
-
 
 
 def reset_save_load(client: TCPSockClient):

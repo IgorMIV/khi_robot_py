@@ -2,7 +2,7 @@ from src.khi_telnet_lib import telnet_connect, TCPSockClient
 
 from src.khi_telnet_lib import get_pc_status, get_rcp_status, upload_program, kill_rcp, \
                                 pc_abort, pc_kill, handshake,\
-                                rcp_prepare, rcp_execute, rcp_hold, \
+                                rcp_prepare, rcp_execute, rcp_prime, rcp_hold, \
                                 pc_execute, \
                                 read_programs_list, pg_delete, ereset
 
@@ -54,7 +54,7 @@ class KHIRoLibLite:
         else:
             return get_pc_status(self._telnet_client, 1 << (thread_num-1))
 
-    def upload_program(self, program_name, program_text):
+    def upload_program(self, program_name, program_text, open_program=False):
         pg_status_list = self.get_status_pc()
         rcp_status = get_rcp_status(self._telnet_client)
 
@@ -80,6 +80,9 @@ class KHIRoLibLite:
 
         program_bytes = bytes(file_string, 'utf-8')
         upload_program(self._telnet_client, program_bytes)
+
+        if open_program:
+            rcp_prime(self._telnet_client, program_name)
 
     def prepare_rcp(self, program_name):
         rcp_prepare(self._telnet_client, program_name)
