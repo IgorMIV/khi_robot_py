@@ -2,9 +2,10 @@ from src.khi_telnet_lib import telnet_connect, TCPSockClient
 
 from src.khi_telnet_lib import get_pc_status, get_rcp_status, upload_program, kill_rcp, \
                                 pc_abort, pc_kill, handshake,\
-                                rcp_prepare, rcp_execute, rcp_prime, rcp_hold, \
+                                rcp_prepare, rcp_execute, rcp_prime, rcp_hold, rcp_continue, rcp_abort,\
                                 pc_execute, \
-                                read_programs_list, pg_delete, ereset
+                                read_programs_list, pg_delete, ereset, \
+                                signal_out
 
 import config.robot as robot_config
 
@@ -43,6 +44,9 @@ class KHIRoLibLite:
     def _get_active_programs_names(self):
         pg_status_list = self.get_status_pc()
         rcp_status = get_rcp_status(self._telnet_client)
+
+    def status(self):
+        return get_rcp_status(self._telnet_client)
 
     def ereset(self):
         ereset(self._telnet_client)
@@ -87,7 +91,22 @@ class KHIRoLibLite:
     def prepare_rcp(self, program_name):
         rcp_prepare(self._telnet_client, program_name)
 
-    def execute_rcp(self, program_name, blocking=True):
+    def hold_rcp(self, program_name):
+        rcp_hold(self._telnet_client)
+
+    def continue_rcp(self):
+        rcp_continue(self._telnet_client)
+
+    def abort_rcp(self):
+        rcp_abort(self._telnet_client)
+
+    def abort_kill_rcp(self):
+        rcp_abort(self._telnet_client)
+        kill_rcp(self._telnet_client)
+
+    def execute_rcp(self, program_name=None, blocking=True):
+        if program_name is None:
+            program_name = ''
         rcp_execute(self._telnet_client, program_name, blocking)
 
     def execute_pc(self, program_name, thread_num):
@@ -118,3 +137,9 @@ class KHIRoLibLite:
 
         for pg_name in pg_list:
             pg_delete(self._telnet_client, pg_name)
+
+    def signal_on(self, signal_num: int):
+        signal_out(self._telnet_client, signal_num)
+
+    def signal_off(self, signal_num: int):
+        signal_out(self._telnet_client, -signal_num)

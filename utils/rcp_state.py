@@ -22,6 +22,16 @@ class RCPState:
     def is_running(self):
         return self.running
 
+    @property
+    def current_step_num(self):
+        return int(self.step_num)
+
+    @property
+    def info(self):
+        ans = "rcp: " + self.name + ", "
+        ans += "run: " + str(self.running)
+        return ans
+
     def __str__(self):
         ans = "RCP name: " + self.name + "\n" + \
               "Motor ON: " + str(self.motor_on) + "\n" + \

@@ -67,6 +67,12 @@ class KHIProgRunningError(ValueError):
         super().__init__(f"Program {program_name} is already running in another thread")
 
 
+class KHIProgramHeldError(Exception):
+    """ Raised when executing motion command with teach pendant with lock ON """
+    def __init__(self, error_description: str):
+        super().__init__(f"Cannot execute motion: {error_description}")
+
+
 class KHIProgLoadedError(ValueError):
     """ Raised when trying to upload / delete / execute program that is halted, but not killed in another thread """
     def __init__(self, program_name: str):
@@ -110,7 +116,13 @@ class KHIMotorsOffError(Exception):
 
 
 class KHIEResetError(Exception):
-    """ Raised when executing motion command with motors powered OFF """
+    """ Raised when robot in ERROR state """
     def __init__(self):
         super().__init__("Cannot execute because in error now.")
+
+
+class KHIWelderError(Exception):
+    """ Raised when can't do ARCON command """
+    def __init__(self):
+        super().__init__("Welder error")
 

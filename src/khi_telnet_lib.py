@@ -26,6 +26,7 @@ CONFIRMATION_REQUEST = b'\x30\x29\x20'                            # Are you sure
 PROGRAM_COMPLETED = b"Program completed.No = 1"
 PROGRAM_ABORTED = b"Program aborted.No = 1"
 PROGRAM_STOPPED = b"No = 1"                                       # Just finished or stopped
+PROGRAM_HELD = b"Program held.No = 1"
 
 SYNTAX_ERROR = b"\r\nSTEP syntax error.\r\n(0:Change to comment and continue, 1:Delete program and abort)\r\n"
 VARIABLE_NOT_DEFINED = b"(E0102) Variable is not defined."
@@ -39,6 +40,9 @@ PROG_IS_ACTIVE = b"Cannot KILL program that is running."          # Program is a
 MOTORS_DISABLED = b"motor power is OFF."                          # Running RCP program with motors powered OFF
 RCP_IS_RUNNING = b"Robot control program is already running."     # Program is running and can't be deleted
 ERROR_NOW = b"(P1013)Cannot execute because in error now. Reset error.\r\n>"
+
+# Custom errors
+WELDER_ERROR_1 = b"(E6585) Welder error occurred.(No. 1)"                               # Can't do arcon
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -326,10 +330,16 @@ def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
 
     if blocking:
         res = client.wait_recv(PROGRAM_STOPPED)
+        print(res)
         if VARIABLE_NOT_DEFINED in res:
             raise KHIVarNotDefinedError
+        elif WELDER_ERROR_1 in res:
+            raise KHIWelderError
+        elif PROGRAM_HELD in res:
+            raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
         elif PROGRAM_COMPLETED in res:
             return
+
         # client.wait_recv(PROGRAM_COMPLETED)
 
 
@@ -348,8 +358,14 @@ def rcp_abort(client: TCPSockClient) -> None:
 
 
 def rcp_hold(client: TCPSockClient) -> None:
-    """ Aborts current RCP program """
+    """ Holds current RCP program """
     client.send_msg("HOLD")
+    client.wait_recv(NEWLINE_MSG)
+
+
+def rcp_continue(client: TCPSockClient) -> None:
+    """ Continue current RCP program """
+    client.send_msg("CONTINUE")
     client.wait_recv(NEWLINE_MSG)
 
 
@@ -401,6 +417,10 @@ def reset_save_load(client: TCPSockClient):
 
 def pack_threads(*threads):
     return sum(1 << (thread_num - 1) for thread_num in threads)
+
+
+def signal_out(client: TCPSockClient, signal):
+    client.send_msg(f"SOUT {signal}")
 
 
 if __name__ == "__main__":
