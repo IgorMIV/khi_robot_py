@@ -91,7 +91,7 @@ class KHIRoLibLite:
     def prepare_rcp(self, program_name):
         rcp_prepare(self._telnet_client, program_name)
 
-    def hold_rcp(self, program_name):
+    def hold_rcp(self):
         rcp_hold(self._telnet_client)
 
     def continue_rcp(self):

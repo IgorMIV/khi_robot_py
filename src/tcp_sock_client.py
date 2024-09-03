@@ -29,6 +29,12 @@ class TCPSockClient:
         self._client.settimeout(SERVER_TIMEOUT if timeout is None else timeout)
         self._client.connect((self._ip, self._port))
 
+    def set_timeout(self, timeout) -> None:
+        self._client.settimeout(timeout)
+
+    def reset_timeout(self) -> None:
+        self._client.settimeout(SERVER_TIMEOUT)
+
     def send_msg(self, msg: str, end: bytes = b'\n') -> None:
         """ Send a message to the robot.
         Args:

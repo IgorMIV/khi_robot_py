@@ -42,7 +42,7 @@ RCP_IS_RUNNING = b"Robot control program is already running."     # Program is r
 ERROR_NOW = b"(P1013)Cannot execute because in error now. Reset error.\r\n>"
 
 # Custom errors
-WELDER_ERROR_1 = b"(E6585) Welder error occurred.(No. 1)"                               # Can't do arcon
+WELDER_ERROR_1 = b"Welder error occurred."                               # Can't do arcon
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -329,15 +329,20 @@ def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
         raise KHIEResetError
 
     if blocking:
+        client.set_timeout(None)
         res = client.wait_recv(PROGRAM_STOPPED)
-        print(res)
         if VARIABLE_NOT_DEFINED in res:
+            client.reset_timeout()
             raise KHIVarNotDefinedError
         elif WELDER_ERROR_1 in res:
+            client.reset_timeout()
             raise KHIWelderError
         elif PROGRAM_HELD in res:
+            client.reset_timeout()
             raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
-        elif PROGRAM_COMPLETED in res:
+
+        client.reset_timeout()
+        if PROGRAM_COMPLETED in res:
             return
 
         # client.wait_recv(PROGRAM_COMPLETED)
@@ -363,10 +368,43 @@ def rcp_hold(client: TCPSockClient) -> None:
     client.wait_recv(NEWLINE_MSG)
 
 
-def rcp_continue(client: TCPSockClient) -> None:
+# def rcp_continue(client: TCPSockClient) -> None:
+#     """ Continue current RCP program """
+#     client.send_msg("CONTINUE")
+#     client.wait_recv(NEWLINE_MSG)
+
+def rcp_continue(client: TCPSockClient, blocking=True):
     """ Continue current RCP program """
     client.send_msg("CONTINUE")
-    client.wait_recv(NEWLINE_MSG)
+    res = client.wait_recv(NEWLINE_MSG)
+
+    if TEACH_MODE_ON in res:
+        raise KHITeachModeError
+    elif TEACH_LOCK_ON in res:
+        raise KHITeachLockError
+    elif MOTORS_DISABLED in res:
+        raise KHIMotorsOffError
+    elif VARIABLE_NOT_DEFINED in res:
+        raise KHIVarNotDefinedError
+    elif ERROR_NOW in res:
+        raise KHIEResetError
+
+    if blocking:
+        client.set_timeout(None)
+        res = client.wait_recv(PROGRAM_STOPPED)
+        if VARIABLE_NOT_DEFINED in res:
+            client.reset_timeout()
+            raise KHIVarNotDefinedError
+        elif WELDER_ERROR_1 in res:
+            client.reset_timeout()
+            raise KHIWelderError
+        elif PROGRAM_HELD in res:
+            client.reset_timeout()
+            raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
+
+        client.reset_timeout()
+        if PROGRAM_COMPLETED in res:
+            return
 
 
 def kill_rcp(client: TCPSockClient) -> None:
