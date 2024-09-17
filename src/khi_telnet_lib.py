@@ -392,6 +392,7 @@ def rcp_continue(client: TCPSockClient, blocking=True):
     if blocking:
         client.set_timeout(None)
         res = client.wait_recv(PROGRAM_STOPPED)
+        print(res)
         if VARIABLE_NOT_DEFINED in res:
             client.reset_timeout()
             raise KHIVarNotDefinedError
@@ -399,6 +400,7 @@ def rcp_continue(client: TCPSockClient, blocking=True):
             client.reset_timeout()
             raise KHIWelderError
         elif PROGRAM_HELD in res:
+            print("PROGRAM HEHEHELD")
             client.reset_timeout()
             raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
 
