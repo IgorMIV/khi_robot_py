@@ -424,6 +424,16 @@ def read_variable_real(client: TCPSockClient, variable_name: str) -> float:
     return real_variable
 
 
+def read_variable_position(client: TCPSockClient, variable_name: str) -> list:
+    client.send_msg(f"list /l {variable_name}")
+    tmp_string = client.wait_recv(NEWLINE_MSG)
+
+    result_list = []
+    for element in tmp_string.split()[5:-1]:
+        result_list.append(float(element))
+    return result_list
+
+
 def read_programs_list(client: TCPSockClient) -> [str]:
     # DEV check this function for long size pg lists
     handshake(client)

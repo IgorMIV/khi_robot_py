@@ -5,7 +5,8 @@ from src.khi_telnet_lib import get_pc_status, get_rcp_status, upload_program, ki
                                 rcp_prepare, rcp_execute, rcp_prime, rcp_hold, rcp_continue, rcp_abort,\
                                 pc_execute, \
                                 read_programs_list, pg_delete, ereset, \
-                                signal_out
+                                signal_out, \
+                                reset_save_load
 
 import config.robot as robot_config
 
@@ -143,3 +144,9 @@ class KHIRoLibLite:
 
     def signal_off(self, signal_num: int):
         signal_out(self._telnet_client, -signal_num)
+
+    def read_variable(self, variable_name):
+        return read_variable_position(self._telnet_client, variable_name)
+
+    def end_message(self):
+        reset_save_load(self._telnet_client)
