@@ -336,9 +336,8 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
     if blocking:
         for i in range(1000):
             await asyncio.sleep(0.5)
-            data_available = client.is_data_available()
 
-            if data_available:
+            if client.is_data_available():
                 res = client.wait_recv(PROGRAM_STOPPED)
                 if VARIABLE_NOT_DEFINED in res:
                     client.reset_timeout()
@@ -356,6 +355,8 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
                 client.reset_timeout()
                 if PROGRAM_COMPLETED in res:
                     return
+
+                print("Unknown header:", res)
 
     # if blocking:
     #     client.set_timeout(None)
@@ -421,9 +422,8 @@ async def rcp_continue(client: TCPSockClient, blocking=True):
     if blocking:
         for i in range(1000):
             await asyncio.sleep(0.5)
-            data_available = client.is_data_available()
 
-            if data_available:
+            if client.is_data_available():
                 res = client.wait_recv(PROGRAM_STOPPED)
                 if VARIABLE_NOT_DEFINED in res:
                     client.reset_timeout()
@@ -439,24 +439,7 @@ async def rcp_continue(client: TCPSockClient, blocking=True):
                 if PROGRAM_COMPLETED in res:
                     return
 
-    # if blocking:
-    #     client.set_timeout(None)
-    #     res = client.wait_recv(PROGRAM_STOPPED)
-    #     print(res)
-    #     if VARIABLE_NOT_DEFINED in res:
-    #         client.reset_timeout()
-    #         raise KHIVarNotDefinedError
-    #     elif WELDER_ERROR_1 in res:
-    #         client.reset_timeout()
-    #         raise KHIWelderError
-    #     elif PROGRAM_HELD in res:
-    #         print("PROGRAM HEHEHELD")
-    #         client.reset_timeout()
-    #         raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
-    #
-    #     client.reset_timeout()
-    #     if PROGRAM_COMPLETED in res:
-    #         return
+                print("Unknown header:", res)
 
 
 def kill_rcp(client: TCPSockClient) -> None:
