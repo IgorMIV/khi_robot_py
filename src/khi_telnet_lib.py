@@ -1,7 +1,11 @@
 import math
+import time
+import asyncio
+
 from utils.thread_state import ThreadState
 from utils.rcp_state import RCPState
 from src.tcp_sock_client import TCPSockClient
+# from src.AsyncTCPSockClient import TCPSockClient
 from src.khi_exception import *
 
 # One package size in bytes for splitting large programs. Slightly faster at higher values
@@ -43,6 +47,7 @@ ERROR_NOW = b"(P1013)Cannot execute because in error now. Reset error.\r\n>"
 
 # Custom errors
 WELDER_ERROR_1 = b"Welder error occurred."                               # Can't do arcon
+WIRE_STICK = b"Wire stick"                                               # Arcof wire stick
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -310,7 +315,7 @@ def rcp_prepare(client: TCPSockClient, program_name: str):
         raise KHIProgNotExistError(program_name)
 
 
-def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
+async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
     """ Executes RCP program of set name """
     client.send_msg("EXECUTE " + program_name)
     res = client.wait_recv(NEWLINE_MSG)
@@ -329,23 +334,47 @@ def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
         raise KHIEResetError
 
     if blocking:
-        client.set_timeout(None)
-        res = client.wait_recv(PROGRAM_STOPPED)
-        if VARIABLE_NOT_DEFINED in res:
-            client.reset_timeout()
-            raise KHIVarNotDefinedError
-        elif WELDER_ERROR_1 in res:
-            client.reset_timeout()
-            raise KHIWelderError
-        elif PROGRAM_HELD in res:
-            client.reset_timeout()
-            raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
+        for i in range(1000):
+            await asyncio.sleep(0.5)
+            data_available = client.is_data_available()
 
-        client.reset_timeout()
-        if PROGRAM_COMPLETED in res:
-            return
+            if data_available:
+                res = client.wait_recv(PROGRAM_STOPPED)
+                if VARIABLE_NOT_DEFINED in res:
+                    client.reset_timeout()
+                    raise KHIVarNotDefinedError
+                elif WELDER_ERROR_1 in res:
+                    client.reset_timeout()
+                    raise KHIWelderError
+                elif WIRE_STICK in res:
+                    client.reset_timeout()
+                    raise KHIWelderError
+                elif PROGRAM_HELD in res:
+                    client.reset_timeout()
+                    raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
 
-        # client.wait_recv(PROGRAM_COMPLETED)
+                client.reset_timeout()
+                if PROGRAM_COMPLETED in res:
+                    return
+
+    # if blocking:
+    #     client.set_timeout(None)
+    #     res = await asyncio.wait_for(client.wait_recv(PROGRAM_STOPPED),
+    #     # res = client.wait_recv(PROGRAM_STOPPED)
+    #     print("RES!!!:", res)
+    #     if VARIABLE_NOT_DEFINED in res:
+    #         client.reset_timeout()
+    #         raise KHIVarNotDefinedError
+    #     elif WELDER_ERROR_1 in res:
+    #         client.reset_timeout()
+    #         raise KHIWelderError
+    #     elif PROGRAM_HELD in res:
+    #         client.reset_timeout()
+    #         raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
+    #
+    #     client.reset_timeout()
+    #     if PROGRAM_COMPLETED in res:
+    #         return
 
 
 def rcp_prime(client: TCPSockClient, program_name: str, blocking=True):
@@ -373,7 +402,7 @@ def rcp_hold(client: TCPSockClient) -> None:
 #     client.send_msg("CONTINUE")
 #     client.wait_recv(NEWLINE_MSG)
 
-def rcp_continue(client: TCPSockClient, blocking=True):
+async def rcp_continue(client: TCPSockClient, blocking=True):
     """ Continue current RCP program """
     client.send_msg("CONTINUE")
     res = client.wait_recv(NEWLINE_MSG)
@@ -390,23 +419,44 @@ def rcp_continue(client: TCPSockClient, blocking=True):
         raise KHIEResetError
 
     if blocking:
-        client.set_timeout(None)
-        res = client.wait_recv(PROGRAM_STOPPED)
-        print(res)
-        if VARIABLE_NOT_DEFINED in res:
-            client.reset_timeout()
-            raise KHIVarNotDefinedError
-        elif WELDER_ERROR_1 in res:
-            client.reset_timeout()
-            raise KHIWelderError
-        elif PROGRAM_HELD in res:
-            print("PROGRAM HEHEHELD")
-            client.reset_timeout()
-            raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
+        for i in range(1000):
+            await asyncio.sleep(0.5)
+            data_available = client.is_data_available()
 
-        client.reset_timeout()
-        if PROGRAM_COMPLETED in res:
-            return
+            if data_available:
+                res = client.wait_recv(PROGRAM_STOPPED)
+                if VARIABLE_NOT_DEFINED in res:
+                    client.reset_timeout()
+                    raise KHIVarNotDefinedError
+                elif WELDER_ERROR_1 in res:
+                    client.reset_timeout()
+                    raise KHIWelderError
+                elif PROGRAM_HELD in res:
+                    client.reset_timeout()
+                    raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
+
+                client.reset_timeout()
+                if PROGRAM_COMPLETED in res:
+                    return
+
+    # if blocking:
+    #     client.set_timeout(None)
+    #     res = client.wait_recv(PROGRAM_STOPPED)
+    #     print(res)
+    #     if VARIABLE_NOT_DEFINED in res:
+    #         client.reset_timeout()
+    #         raise KHIVarNotDefinedError
+    #     elif WELDER_ERROR_1 in res:
+    #         client.reset_timeout()
+    #         raise KHIWelderError
+    #     elif PROGRAM_HELD in res:
+    #         print("PROGRAM HEHEHELD")
+    #         client.reset_timeout()
+    #         raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
+    #
+    #     client.reset_timeout()
+    #     if PROGRAM_COMPLETED in res:
+    #         return
 
 
 def kill_rcp(client: TCPSockClient) -> None:

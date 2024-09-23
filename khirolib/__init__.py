@@ -1,11 +1,12 @@
-from src.khi_telnet_lib import telnet_connect, TCPSockClient
+from src.khi_telnet_lib import telnet_connect  #, TCPSockClient
+from src.tcp_sock_client import TCPSockClient
 
 from src.khi_telnet_lib import get_pc_status, get_rcp_status, upload_program, kill_rcp, \
                                 pc_abort, pc_kill, handshake,\
                                 rcp_prepare, rcp_execute, rcp_prime, rcp_hold, rcp_continue, rcp_abort,\
                                 pc_execute, \
                                 read_programs_list, pg_delete, ereset, \
-                                signal_out, \
+                                signal_out, read_variable_position, \
                                 reset_save_load
 
 import config.robot as robot_config
@@ -29,6 +30,8 @@ class KHIRoLibLite:
         """ Connection sequence to the robot."""
         self._telnet_client = TCPSockClient(self._ip, self._telnet_port)
         telnet_connect(self._telnet_client)
+
+        print("Connection with robot established")
 
         # if self._is_real_robot:
         #     # Check for running tcp-ip process
@@ -95,8 +98,8 @@ class KHIRoLibLite:
     def hold_rcp(self):
         rcp_hold(self._telnet_client)
 
-    def continue_rcp(self):
-        rcp_continue(self._telnet_client)
+    async def continue_rcp(self):
+        await rcp_continue(self._telnet_client)
 
     def abort_rcp(self):
         rcp_abort(self._telnet_client)
@@ -105,10 +108,10 @@ class KHIRoLibLite:
         rcp_abort(self._telnet_client)
         kill_rcp(self._telnet_client)
 
-    def execute_rcp(self, program_name=None, blocking=True):
+    async def execute_rcp(self, program_name=None, blocking=True):
         if program_name is None:
             program_name = ''
-        rcp_execute(self._telnet_client, program_name, blocking)
+        await rcp_execute(self._telnet_client, program_name, blocking)
 
     def execute_pc(self, program_name, thread_num):
         pc_execute(self._telnet_client, program_name, thread_num)

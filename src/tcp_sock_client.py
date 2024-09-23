@@ -7,6 +7,7 @@ Constants:
 """
 
 import socket
+import select
 
 RECV_TIMEOUT = 1
 SERVER_TIMEOUT = 10
@@ -51,6 +52,10 @@ class TCPSockClient:
         """
         # print("sent:", msg)
         self._client.sendall(msg)
+
+    def is_data_available(self):
+        ready_to_read, _, _ = select.select([self._client], [], [], 0.1)
+        return ready_to_read
 
     def wait_recv(self, *ends: bytes) -> bytes:
         """ Wait to receive data from the robot until one of the specified end markers is encountered.
