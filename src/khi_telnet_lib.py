@@ -47,7 +47,9 @@ ERROR_NOW = b"(P1013)Cannot execute because in error now. Reset error.\r\n>"
 
 # Custom errors
 WELDER_ERROR_1 = b"Welder error occurred."                               # Can't do arcon
-WIRE_STICK = b"Wire stick"                                               # Arcof wire stick
+WELDER_ERROR_2 = b"Welder error occurred."                               # Arcof wire stick
+NO_WORK_DETECTED_ERROR = b'(E6509) No work detected.'                    # No work detected
+
 
 
 def telnet_connect(client: TCPSockClient) -> None:
@@ -68,6 +70,11 @@ def handshake(client: TCPSockClient) -> None:
 
 def ereset(client: TCPSockClient) -> None:
     client.send_msg("ERESET")
+    client.wait_recv(NEWLINE_MSG)
+
+
+def motor_on(client: TCPSockClient) -> None:
+    client.send_msg("ZPOW ON")
     client.wait_recv(NEWLINE_MSG)
 
 
@@ -339,15 +346,19 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
 
             if client.is_data_available():
                 res = client.wait_recv(PROGRAM_STOPPED)
+                print("RESRES", res)
                 if VARIABLE_NOT_DEFINED in res:
                     client.reset_timeout()
                     raise KHIVarNotDefinedError
                 elif WELDER_ERROR_1 in res:
                     client.reset_timeout()
-                    raise KHIWelderError
-                elif WIRE_STICK in res:
+                    raise KHIWelder1Error
+                elif WELDER_ERROR_2 in res:
                     client.reset_timeout()
-                    raise KHIWelderError
+                    raise KHIWelder2Error
+                elif NO_WORK_DETECTED_ERROR in res:
+                    client.reset_timeout()
+                    raise KHINoWorkDetectedError
                 elif PROGRAM_HELD in res:
                     client.reset_timeout()
                     raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
@@ -430,7 +441,13 @@ async def rcp_continue(client: TCPSockClient, blocking=True):
                     raise KHIVarNotDefinedError
                 elif WELDER_ERROR_1 in res:
                     client.reset_timeout()
-                    raise KHIWelderError
+                    raise KHIWelder1Error
+                elif WELDER_ERROR_2 in res:
+                    client.reset_timeout()
+                    raise KHIWelder2Error
+                elif NO_WORK_DETECTED_ERROR in res:
+                    client.reset_timeout()
+                    raise KHINoWorkDetectedError
                 elif PROGRAM_HELD in res:
                     client.reset_timeout()
                     raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))

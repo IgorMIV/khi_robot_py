@@ -121,8 +121,20 @@ class KHIEResetError(Exception):
         super().__init__("Cannot execute because in error now.")
 
 
-class KHIWelderError(Exception):
+class KHIWelder1Error(Exception):
     """ Raised when can't do ARCON command """
     def __init__(self):
-        super().__init__("Welder error")
+        super().__init__("Welder error: 1")
+
+
+class KHIWelder2Error(Exception):
+    """ Raised when Wire stick """
+    def __init__(self):
+        super().__init__("Welder error: 2")
+
+
+class KHINoWorkDetectedError(Exception):
+    """ Raised when can't do touch sensing """
+    def __init__(self):
+        super().__init__("Touch sensing error")
 

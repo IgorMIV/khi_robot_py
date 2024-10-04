@@ -7,7 +7,7 @@ from src.khi_telnet_lib import get_pc_status, get_rcp_status, upload_program, ki
                                 pc_execute, \
                                 read_programs_list, pg_delete, ereset, \
                                 signal_out, read_variable_position, \
-                                reset_save_load
+                                reset_save_load, motor_on
 
 import config.robot as robot_config
 
@@ -51,6 +51,9 @@ class KHIRoLibLite:
 
     def status(self):
         return get_rcp_status(self._telnet_client)
+
+    async def motor_on(self):
+        motor_on(self._telnet_client)
 
     def ereset(self):
         ereset(self._telnet_client)
