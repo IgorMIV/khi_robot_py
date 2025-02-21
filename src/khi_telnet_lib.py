@@ -61,6 +61,25 @@ def telnet_connect(client: TCPSockClient) -> None:
         raise KHIConnError()
 
 
+def wait_for_data(client: TCPSockClient, timeout: float = 1.0) -> bytes | None:
+    """
+    Wait for data to become available on the socket within the specified timeout.
+
+    Args:
+        client (TCPSockClient): The TCP socket client.
+        timeout (float): Maximum time to wait for data, in seconds.
+
+    Returns:
+        bytes | None: The received data if available, or None if no data is received within the timeout.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if client.is_data_available():
+            return client.wait_recv()  # Return data as soon as it's available
+        time.sleep(0.1)  # Wait briefly before checking again
+    return None
+
+
 def handshake(client: TCPSockClient) -> None:
     """ Performs a handshake with the robot and raises an exception if something fails """
     client.send_msg("")                         # Send empty command
@@ -360,6 +379,16 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
                     client.reset_timeout()
                     raise KHINoWorkDetectedError
                 elif PROGRAM_HELD in res:
+                    print("PROGRAM HELD!!!!")
+                    any_result = wait_for_data(client, timeout=2.0)
+                    if any_result:
+                        print("!!!!! Received data:", any_result)
+                        if NO_WORK_DETECTED_ERROR in any_result:
+                            client.reset_timeout()
+                            raise KHINoWorkDetectedError
+                        else:
+                            print("Valid response received, processing...")
+
                     client.reset_timeout()
                     raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
 
