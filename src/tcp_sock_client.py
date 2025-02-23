@@ -10,7 +10,7 @@ import socket
 import select
 
 RECV_TIMEOUT = 1
-SERVER_TIMEOUT = 10
+SERVER_TIMEOUT = 1
 
 
 class TCPSockClient:
@@ -28,7 +28,15 @@ class TCPSockClient:
 
         self._client: socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._client.settimeout(SERVER_TIMEOUT if timeout is None else timeout)
-        self._client.connect((self._ip, self._port))
+        # self._client.connect((self._ip, self._port))
+
+        self._client.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+        try:
+            self._client.connect((self._ip, self._port))
+            self.connected = True
+        except (socket.timeout, socket.error):
+            self.connected = False
 
     def set_timeout(self, timeout) -> None:
         self._client.settimeout(timeout)
@@ -80,6 +88,20 @@ class TCPSockClient:
                         return incoming
         except socket.timeout:  # Off timeout while waiting program complete message
             raise TimeoutError
+
+    def is_connected(self) -> bool:
+        """ Check connection """
+        try:
+            read, _, error = select.select([self._client], [], [self._client], 0)
+            if error:
+                self.connected = False
+                return False
+
+            self._client.send(b"")
+            return True
+        except (socket.error, BrokenPipeError, OSError):
+            self.connected = False
+            return False
 
     def disconnect(self) -> None:
         """ Closes connection """

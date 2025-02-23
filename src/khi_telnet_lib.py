@@ -365,7 +365,7 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
 
             if client.is_data_available():
                 res = client.wait_recv(PROGRAM_STOPPED)
-                print("RESRES", res)
+                # print("RESRES", res)
                 if VARIABLE_NOT_DEFINED in res:
                     client.reset_timeout()
                     raise KHIVarNotDefinedError
@@ -379,10 +379,10 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
                     client.reset_timeout()
                     raise KHINoWorkDetectedError
                 elif PROGRAM_HELD in res:
-                    print("PROGRAM HELD!!!!")
+                    # print("PROGRAM HELD!!!!")
                     any_result = wait_for_data(client, timeout=2.0)
                     if any_result:
-                        print("!!!!! Received data:", any_result)
+                        # print("!!!!! Received data:", any_result)
                         if NO_WORK_DETECTED_ERROR in any_result:
                             client.reset_timeout()
                             raise KHINoWorkDetectedError
@@ -550,6 +550,23 @@ def pack_threads(*threads):
 
 def signal_out(client: TCPSockClient, signal):
     client.send_msg(f"SOUT {signal}")
+
+
+def get_where(client: TCPSockClient):
+    client.send_msg(f"WHERE")
+    res = client.wait_recv(NEWLINE_MSG).decode().split("\r\n")
+
+    # print("FULL ANS:", res)
+
+    result_list = []
+    for element in res[4].split():
+        result_list.append(float(element))
+
+    return result_list
+
+
+def check_connection(client: TCPSockClient):
+    return client.is_connected()
 
 
 if __name__ == "__main__":

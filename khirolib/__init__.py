@@ -7,7 +7,8 @@ from src.khi_telnet_lib import get_pc_status, get_rcp_status, upload_program, ki
                                 pc_execute, \
                                 read_programs_list, pg_delete, ereset, \
                                 signal_out, read_variable_position, \
-                                reset_save_load, motor_on
+                                reset_save_load, motor_on, \
+                                get_where, check_connection
 
 import config.robot as robot_config
 
@@ -156,3 +157,9 @@ class KHIRoLibLite:
 
     def end_message(self):
         reset_save_load(self._telnet_client)
+
+    def get_current_position(self):
+        return get_where(self._telnet_client)
+
+    def check_connection(self):
+        return check_connection(self._telnet_client)
