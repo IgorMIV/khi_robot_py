@@ -556,10 +556,13 @@ def get_where(client: TCPSockClient):
     client.send_msg(f"WHERE")
     res = client.wait_recv(NEWLINE_MSG).decode().split("\r\n")
 
-    # print("FULL ANS:", res)
+    print("WHERE LENGTH", len(res))
+    for element in res:
+        print(element)
 
     result_list = []
     for element in res[4].split():
+        # print(element)
         result_list.append(float(element))
 
     return result_list
