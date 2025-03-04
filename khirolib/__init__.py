@@ -34,12 +34,6 @@ class KHIRoLibLite:
 
         print("Connection with robot established")
 
-        # if self._is_real_robot:
-        #     # Check for running tcp-ip process
-        #     self._tcpip_client = TCPSockClient(self._ip, self._tcpip_port)
-
-        # self.start()
-
     def close(self):
         """ Close sequence for robot.
         Used explicitly to close all connections or when __del__ is called
@@ -73,7 +67,6 @@ class KHIRoLibLite:
         for element in pg_status_list:
             if element.is_exist:
                 if element.name == program_name:  # добавить регистр
-                    print("Bingo", element.name, element.is_running, element.thread_num)
                     if element.is_running:
                         pc_abort(self._telnet_client, 1 << (element.thread_num-1))
                     pc_kill(self._telnet_client, 1 << (element.thread_num-1))

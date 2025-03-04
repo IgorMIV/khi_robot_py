@@ -153,9 +153,6 @@ def parse_program_rcp(robot_msg: str) -> ThreadState:
     res.name = lines[-1].split()[0]
     res.step_num = lines[-1].split()[2]
 
-    # for element in lines:
-    #     print("!!!!", element)
-
     for line in lines:
         if "Motor power " in line:
             # because if motor is ON - STATUS message isn't consist this state - default True
@@ -365,7 +362,6 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
 
             if client.is_data_available():
                 res = client.wait_recv(PROGRAM_STOPPED)
-                # print("RESRES", res)
                 if VARIABLE_NOT_DEFINED in res:
                     client.reset_timeout()
                     raise KHIVarNotDefinedError
@@ -379,10 +375,8 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
                     client.reset_timeout()
                     raise KHINoWorkDetectedError
                 elif PROGRAM_HELD in res:
-                    # print("PROGRAM HELD!!!!")
                     any_result = wait_for_data(client, timeout=2.0)
                     if any_result:
-                        # print("!!!!! Received data:", any_result)
                         if NO_WORK_DETECTED_ERROR in any_result:
                             client.reset_timeout()
                             raise KHINoWorkDetectedError
@@ -397,25 +391,6 @@ async def rcp_execute(client: TCPSockClient, program_name: str, blocking=True):
                     return
 
                 print("Unknown header:", res)
-
-    # if blocking:
-    #     client.set_timeout(None)
-    #     res = await asyncio.wait_for(client.wait_recv(PROGRAM_STOPPED),
-    #     # res = client.wait_recv(PROGRAM_STOPPED)
-    #     print("RES!!!:", res)
-    #     if VARIABLE_NOT_DEFINED in res:
-    #         client.reset_timeout()
-    #         raise KHIVarNotDefinedError
-    #     elif WELDER_ERROR_1 in res:
-    #         client.reset_timeout()
-    #         raise KHIWelderError
-    #     elif PROGRAM_HELD in res:
-    #         client.reset_timeout()
-    #         raise KHIProgramHeldError(' '.join(res.decode('utf-8').split()))
-    #
-    #     client.reset_timeout()
-    #     if PROGRAM_COMPLETED in res:
-    #         return
 
 
 def rcp_prime(client: TCPSockClient, program_name: str, blocking=True):
@@ -556,13 +531,8 @@ def get_where(client: TCPSockClient):
     client.send_msg(f"WHERE")
     res = client.wait_recv(NEWLINE_MSG).decode().split("\r\n")
 
-    print("WHERE LENGTH", len(res))
-    for element in res:
-        print(element)
-
     result_list = []
     for element in res[4].split():
-        # print(element)
         result_list.append(float(element))
 
     return result_list

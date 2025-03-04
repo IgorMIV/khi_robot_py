@@ -1,39 +1,27 @@
-from khirolib import *
+from khirolib import KHIRoLibLite
+import asyncio
 
 IP = "127.0.0.1"    # IP for K-Roset
-PORT = 9105         # Port for K-Roset
+# IP = "192.168.0.2"    # IP for real robot
 
-with khirolib(IP, PORT, log=True) as robot:
+async def main():
+    robot = KHIRoLibLite(IP)
 
-    program_text = ""
-    for i in range(1000):
-        program_text += "POINT loc1 = TRANS(0, 0, {0})\n".format(i)
+    program_text = (f"point .l1 = HERE\n"
+                    f"point .l2 = SHIFT(.l1 by -100,0,0)\n"
+                    f"SPEED 50 mm/s ALWAYS\n"
+                    f"JMOVE .l1\n"
+                    f"JMOVE .l2\n"
+                    f"JMOVE .l1\n")
 
-    for i in range(100):
+    robot.upload_program(program_name="test_pg",
+                         program_text=program_text,
+                         open_program=True)
 
-        result = robot.upload_program(program_name="prog{0}.as".format(i),
-                                      program_text=program_text)
-        print("sent program ", i)
+    await robot.execute_rcp(program_name="test_pg", blocking=False)
 
-    # result = robot.upload_program(filename="as_programs/endless.pc")
-    # result = robot.upload_program(filename="as_programs/endless_move.as")
-    #
-    # program_text = "var1 = 10\n" \
-    #                "POINT loc1 = TRANS(100, 100, 100, 100)"
-    # robot.upload_program(program_name="prog", program_text=program_text)
-    #
-    # robot.execute_pc(program_name="endless", thread=3)
-    #
-    # robot.execute_rcp("endless_move")
-    #
-    # result = robot.abort_pc(program_name='endless')
-    # print(result)
-    #
-    # result = robot.kill_pc(program_name='endless')
-    # print(result)  #
-    #
-    # # rcp_status = robot.status_rcp()
-    # # print(rcp_status)
-    #
-    # pc_status = robot.status_pc()
-    # print(pc_status)
+    # Future problems:
+    #  In K-Roset simulation - prepare_rcp_program after upload_program will not change program on the teach
+    #  pendant, but in fact - it will be a new program - you can check it if try change active line manually
+
+asyncio.run(main())
