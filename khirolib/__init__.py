@@ -47,7 +47,7 @@ class KHIRoLibLite:
     def status(self):
         return get_rcp_status(self._telnet_client)
 
-    async def motor_on(self):
+    def motor_on(self):
         motor_on(self._telnet_client)
 
     def ereset(self):
