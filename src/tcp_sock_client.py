@@ -89,6 +89,20 @@ class TCPSockClient:
         except socket.timeout:  # Off timeout while waiting program complete message
             raise TimeoutError
 
+    def flush_input_buffer(self) -> None:
+        """ Clear any data currently in the input buffer without blocking. """
+        self._client.setblocking(False)
+        try:
+            while True:
+                if not self.is_data_available():
+                    break
+                try:
+                    self._client.recv(1024)
+                except BlockingIOError:
+                    break
+        finally:
+            self._client.setblocking(True)
+
     def is_connected(self) -> bool:
         """ Check connection """
         try:

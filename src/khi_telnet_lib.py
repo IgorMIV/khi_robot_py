@@ -528,6 +528,7 @@ def signal_out(client: TCPSockClient, signal):
 
 
 def get_where(client: TCPSockClient):
+    client.flush_input_buffer()
     client.send_msg(f"WHERE")
     res = client.wait_recv(NEWLINE_MSG).decode().split("\r\n")
 
