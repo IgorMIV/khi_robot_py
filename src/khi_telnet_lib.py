@@ -479,10 +479,12 @@ def read_variable_real(client: TCPSockClient, variable_name: str) -> float:
 
 
 def read_variable_position(client: TCPSockClient, variable_name: str) -> list:
+    handshake(client)
     client.send_msg(f"list /l {variable_name}")
     tmp_string = client.wait_recv(NEWLINE_MSG)
 
     result_list = []
+    print("AAAAAAAAAA", tmp_string)
     for element in tmp_string.split()[5:-1]:
         result_list.append(float(element))
     return result_list
