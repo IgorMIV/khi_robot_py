@@ -472,6 +472,7 @@ def kill_rcp(client: TCPSockClient) -> None:
 
 
 def read_variable_real(client: TCPSockClient, variable_name: str) -> float:
+    handshake(client)
     client.send_msg(f"list /r {variable_name}")
     tmp_string = client.wait_recv(NEWLINE_MSG)
     real_variable = float(tmp_string.split()[-2])
@@ -484,7 +485,6 @@ def read_variable_position(client: TCPSockClient, variable_name: str) -> list:
     tmp_string = client.wait_recv(NEWLINE_MSG)
 
     result_list = []
-    print("AAAAAAAAAA", tmp_string)
     for element in tmp_string.split()[5:-1]:
         result_list.append(float(element))
     return result_list
